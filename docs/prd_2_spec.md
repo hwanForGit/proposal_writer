@@ -58,7 +58,7 @@ Phase 1 종료: 아웃라인 트리 확정
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│ Header: Proposal Writer · [← 아웃라인으로]                          │
+│ Header: Proposal Writer · [← 아웃라인으로]    [📊 12.3k tok · $0.45]│
 ├──────────────────────────┬────────────────────────────────────────┤
 │ [Outline (compact)]      │ [Body Panel]                            │
 │ ▼ 1. 사업 개요            │ # 📝 1.1 추진 배경 및 필요성 상세 초안   │
@@ -82,11 +82,14 @@ Phase 1 종료: 아웃라인 트리 확정
 ### 4.2 컴포넌트 단위 (추가)
 - `DraftPage` — `/draft` 라우트 컨테이너
 - `DraftOutlineTree` — Phase 1 OutlineTree에 상태 아이콘만 추가한 변형 (또는 prop으로 분기)
-- `BodyPanel` — 선택된 노드 본문 렌더/편집/액션
+- `BodyPanel` — 선택된 노드 본문 렌더/편집/액션 + 자료 매칭 토글 사이드
 - `MarkdownView` — react-markdown 래퍼 (GFM 활성화, 코드/표/볼드 등)
 - `MarkdownEditor` — textarea + 미리보기 분할
+- `SourceReferenceList` — 노드별 회사 자료 토글 UI (자동 매칭 결과 표시 + 포함/제외)
 - `GenerationProgress` — 진행도 바, 정지 버튼
-- `StrategyBanner` — 화면 상단에 전략 요약(접힘) 표시
+- `StrategyBanner` — 화면 상단에 전략 요약(접힘) 표시 + [재생성] 버튼
+- `UsageBadge` — 헤더 우상단 누적 사용량/비용 표시 (호버 시 호출별 내역)
+- `CostConfirmDialog` — 생성/재생성 직전 예상 비용 확인
 
 ---
 
@@ -97,7 +100,7 @@ Phase 1 종료: 아웃라인 트리 확정
 - 모든 파일이 `parsed` 상태 (uploading/error 없음)
 - 활성 시 `/draft`로 라우팅
 
-### 5.2 전략 요약 (1회 호출)
+### 5.2 전략 요약 + 자사 자료 매칭 (1회 호출)
 - 입력: 공고/양식 텍스트 전체 + 회사 정보 텍스트 전체 + 확정된 아웃라인 JSON
 - 출력 (구조화):
   ```ts
@@ -105,9 +108,12 @@ Phase 1 종료: 아웃라인 트리 확정
     funderNeeds: string;        // 발주처 니즈
     differentiators: string;    // 자사 매칭 승부수
     benchmarks: string;         // 벤치마킹 포인트
+    nodeReferences: Record<string, string[]>; // nodeId → companyFileIds (자동 매칭)
   }
   ```
+- **노드별 자사 자료 매칭(자동)** 도 같은 호출에서 함께 받아 LLM 호출을 2회로 쪼개지 않는다 (캐시 효율).
 - 캐시: 시스템 프롬프트 + 입력 자료를 **prompt cache 블록**으로 분리 → 본문 호출 N회에 재사용
+- **재생성 정책**: 세션 동안 자동 1회. 사용자가 StrategyBanner의 **[재생성] 버튼**을 누르면 다시 호출 (확인 다이얼로그 거침)
 - 위치: `/draft` 진입 후 자동 1회. 결과는 store에 저장 후 노드별 호출의 입력으로 사용
 
 ### 5.3 노드 단위 본문 생성
@@ -126,11 +132,18 @@ Phase 1 종료: 아웃라인 트리 확정
 - **System** (캐시): prd_2.md의 [System Role] + [Expert Writing Rules]
 - **User 캐시 블록**:
   - `<announcement_documents>...</announcement_documents>` — 공고/양식 텍스트
-  - `<company_documents>...</company_documents>` — 회사 정보 텍스트
-  - `<proposal_strategy>...</proposal_strategy>` — §5.2 결과
+  - `<company_documents>...</company_documents>` — 회사 정보 텍스트 (사용자가 토글로 제외한 파일은 빼고 전송)
+  - `<proposal_strategy>...</proposal_strategy>` — §5.2 결과 (funderNeeds/differentiators/benchmarks)
 - **User 비캐시(노드별)**:
   - `<target_section>{title, description, ancestry}</target_section>` — 현재 작성 대상
+  - `<assigned_company_sources>{fileIds}</assigned_company_sources>` — 사용자가 확정한 매칭 결과
   - "위 규칙과 4단계 사고 과정을 따라 본문을 작성하라"
+
+#### 자사 자료 매칭 (자동 + 사용자 수정)
+- §5.2의 `nodeReferences[nodeId]`를 기본값으로 사용 (LLM 자동 매칭).
+- 노드 선택 시 BodyPanel 사이드에 **회사 자료 토글 리스트** 표시. 사용자가 파일 단위로 포함/제외 가능.
+- 매칭 결과는 store에 보존(`NodeBody.companyFileIds`) → 본문 생성 호출에 사용 + localStorage 저장 대상.
+- chunk 단위 부분 매칭은 Phase 2에서 다루지 않음 (파일 단위만).
 
 #### 4단계 사고 과정 (prd_2.md 그대로)
 1. **데이터 갭 분석 + 실시간 웹 검색** — 본 섹션의 논리 강화에 필요한 외부 데이터 식별 → 검색 실행
@@ -184,7 +197,19 @@ Phase 1 종료: 아웃라인 트리 확정
 - **재생성**: 노드 단위로 재호출. 기존 본문은 1단계 히스토리만 보관 ("이전 본문으로 복원" 1회 가능)
 - **복사**: 현재 마크다운 → 클립보드
 
-### 5.6 저장 (localStorage 키 버전업)
+### 5.6 비용 가드 + 누적 사용량 표시
+- **사전 확인 다이얼로그**:
+  - "전체 생성" / 노드 [재생성] / 전략 [재생성] 클릭 시 표시
+  - 표시 내용: 예상 호출 수, 캐시 적용 후 예상 입력 토큰, 예상 비용($) (모델 단가 × 토큰 산정)
+  - 단가는 채택한 LLM 프로바이더 기준으로 `server/llm/pricing.ts` 상수로 관리
+- **누적 사용량 Badge** (`UsageBadge`):
+  - 화면 우상단 헤더에 고정
+  - 표시: 누적 input/output 토큰, 캐시 read 토큰, 웹 검색 횟수, 누적 비용($)
+  - 데이터 출처: 모든 API 응답의 `usage` 필드를 store에 누적
+  - 호버 시 호출별 내역 미리보기 (펼침)
+- 가드 정책: 차단은 없음. 사용자가 확인하면 진행. (월 사용량 hard cap은 Phase 4)
+
+### 5.7 저장 (localStorage 키 버전업)
 - 키: `proposal_writer.document.v1`
 - 값:
   ```ts
@@ -192,6 +217,7 @@ Phase 1 종료: 아웃라인 트리 확정
     outline: OutlineNode[];           // Phase 1
     strategy: ProposalStrategy | null;
     bodies: Record<string, NodeBody>; // nodeId → 본문
+    usageTotals: UsageTotals;
     savedAt: string;
   }
 
@@ -199,6 +225,7 @@ Phase 1 종료: 아웃라인 트리 확정
     nodeId: string;
     markdown: string;
     citations: Citation[];
+    companyFileIds: string[];   // 사용자가 확정한 매칭 (자동 매칭 + 수정)
     generatedAt: string;
     editedAt?: string;
     previousMarkdown?: string;  // 1단계 undo
@@ -211,8 +238,17 @@ Phase 1 종료: 아웃라인 트리 확정
     snippet?: string;
     publishedAt?: string;
   }
+
+  interface UsageTotals {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    webSearches: number;
+    estimatedUsd: number;
+  }
   ```
-- 저장 트리거: 본문 생성 완료, 편집 저장, "전체 저장" 버튼
+- 저장 트리거: 본문 생성 완료, 편집 저장, 매칭 토글 변경, "전체 저장" 버튼
 
 ---
 
@@ -296,11 +332,13 @@ server/
     "strategy": {
       "funderNeeds": "...",
       "differentiators": "...",
-      "benchmarks": "..."
+      "benchmarks": "...",
+      "nodeReferences": { "1.1": ["fileId-a"], "1.2": ["fileId-a", "fileId-b"] }
     },
-    "usage": { "inputTokens": ..., "outputTokens": ..., "cacheReadTokens": ... }
+    "usage": { "inputTokens": ..., "outputTokens": ..., "cacheReadTokens": ..., "cacheWriteTokens": ... }
   }
   ```
+- 클라이언트는 응답의 `usage`를 `UsageTotals`에 즉시 누적 → UsageBadge 갱신.
 
 ### `POST /api/body/generate`
 - Body:
@@ -309,9 +347,11 @@ server/
     "node": { "id": "1.1", "title": "...", "description": "...", "ancestry": ["1. 사업 개요"] },
     "strategy": {/* ProposalStrategy */},
     "announcementFiles": [/* 캐시키 동일하게 사용 */],
-    "companyFiles":      [/* 캐시키 동일하게 사용 */]
+    "companyFiles":      [/* 캐시키 동일하게 사용 */],
+    "companyFileIds":    ["fileId-a", "fileId-b"]
   }
   ```
+- `companyFiles`는 캐시 동일성을 위해 항상 전체 전달, `companyFileIds`로 본 호출에서 실제 활용할 파일을 LLM에 지시.
 - Response:
   ```json
   {
@@ -350,14 +390,14 @@ server/
 
 - [ ] **M12** — `/draft` 라우트 + 화면 골격 (좌측 트리, 우측 빈 패널)
 - [ ] **M13** — `LlmProvider` 인터페이스 + 채택 프로바이더 구현 (M7 결정에 의존)
-- [ ] **M14** — `POST /api/strategy/generate` + 전략 요약 store 반영 + StrategyBanner
-- [ ] **M15** — `POST /api/body/generate` (검색 미포함 1차) + 단일 노드 생성 흐름
-- [ ] **M16** — 웹 검색 통합 (§6.2 채택 옵션)
-- [ ] **M17** — 클라이언트 큐(동시성 4) + 진행도 UI + "정지"
-- [ ] **M18** — 본문 마크다운 렌더(`react-markdown` + `remark-gfm`)
+- [ ] **M14** — `POST /api/strategy/generate` (전략 + 노드별 자료 매칭) + StrategyBanner + [재생성] + UsageBadge 초기 누적
+- [ ] **M15** — `POST /api/body/generate` (검색 미포함 1차) + 단일 노드 생성 흐름 + CostConfirmDialog
+- [ ] **M16** — 웹 검색 통합 (§6.2 채택 옵션) + UsageBadge에 검색 횟수 누적
+- [ ] **M17** — 클라이언트 큐(동시성 4) + 진행도 UI + "정지" + "전체 생성" 비용 다이얼로그
+- [ ] **M18** — 본문 마크다운 렌더(`react-markdown` + `remark-gfm`) + `SourceReferenceList` (자료 토글)
 - [ ] **M19** — 인라인 편집 모드(textarea + 미리보기) + 저장/취소
 - [ ] **M20** — 노드 재생성 + 1단계 undo
-- [ ] **M21** — localStorage 키 `proposal_writer.document.v1`로 통합 저장 + 복구
+- [ ] **M21** — localStorage 키 `proposal_writer.document.v1`로 통합 저장 + 복구 (`UsageTotals` 포함)
 - [ ] **M22** — 에러/리트라이/타임아웃 정리, 빈 상태 UI
 
 ---
@@ -371,17 +411,17 @@ server/
 
 ---
 
-## 11. 미해결 결정사항 (prd_2.md에 명시 안 됨 — 합리적 기본값으로 진행 후 검증)
+## 11. 확정된 결정사항 (2026-05-27)
 
-| # | 주제 | 기본값(임시) | 사용자 확인 필요 시점 |
-|---|------|--------------|----------------------|
-| 1 | 본문 호출 대상 단위 | **리프 노드만** | M15 착수 전 |
-| 2 | "할당된 자사 핵심 정보" 매칭 | **LLM이 전체 회사 자료에서 자동 매칭** (Phase 2.1에서 수동 할당 UI 검토) | M15 |
-| 3 | 본문 생성 순서 | **위→아래 큐 + 동시 4** | M17 |
-| 4 | 편집 UI | **textarea + 분할 미리보기** (toast UI 같은 풀 에디터는 over-kill) | M19 |
-| 5 | 시각화 추천 처리 | Phase 2는 **텍스트 추천만** (Phase 3에서 자동 삽입 검토) | — |
-| 6 | 전략 요약 캐싱 정책 | **세션 동안 1회**. 아웃라인 변경 시 재생성 안 함 (사용자가 "재생성" 버튼 누르면 다시) | M14 |
-| 7 | 재생성 비용 가드 | **확인 다이얼로그만** (월 사용량 cap은 Phase 4) | M20 |
+| # | 주제 | 확정 |
+|---|------|------|
+| 1 | 본문 호출 대상 단위 | **리프 노드만** (대/중분류는 자식 본문 채워지면 completed) |
+| 2 | 자사 핵심 정보 매칭 | **자동 + 사용자 수정 가능** — LLM이 노드별로 회사 파일을 자동 매핑, 사용자가 노드별 토글 UI로 파일 단위 포함/제외 |
+| 3 | 본문 생성 순서 | **위→아래 큐 + 동시 4** |
+| 4 | 편집 UI | **textarea + 라이브 미리보기** (분할) |
+| 5 | 시각화 추천 처리 | Phase 2는 **텍스트 추천만** (Phase 3에서 자동 삽입 검토) |
+| 6 | 전략 요약 캐싱 정책 | **세션 동안 1회 + 사용자 [재생성] 버튼**. 아웃라인 변경 시 자동 재호출은 하지 않음 |
+| 7 | 비용 가드 | **사전 확인 다이얼로그 + 화면 상단 누적 사용량 Badge** (월 cap은 Phase 4) |
 
 ---
 
