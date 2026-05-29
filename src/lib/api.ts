@@ -166,6 +166,27 @@ export async function generateStep2Section(input: {
   return api.post<Step2SectionResponse>('/api/outline/step2/section', input);
 }
 
+export interface BodySectionResponse {
+  markdown: string;
+  modelId: string;
+  generatedAt: string;
+  finishReason: string | null;
+  usage: OutlineUsage | null;
+  elapsedMs: number;
+}
+
+export async function generateBodySection(input: {
+  announcementFiles: OutlineGenerateInputFile[];
+  companyFiles: OutlineGenerateInputFile[];
+  step1Markdown: string;
+  mainTitle: string;
+  midTitle: string;
+  midGuidance: string;
+  step2SectionMarkdown: string;
+}): Promise<BodySectionResponse> {
+  return api.post<BodySectionResponse>('/api/body/section', input);
+}
+
 // 레거시: 전체를 한 번에 스트림. 큰 입력에서 502 가능. split 흐름 정착 후 제거 예정.
 export type OutlineStreamEvent =
   | { type: 'delta'; text: string }

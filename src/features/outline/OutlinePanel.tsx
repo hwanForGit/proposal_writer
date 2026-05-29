@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useWorkspaceStore } from '@/features/workspace/store';
 import type {
+  BodyState,
   OutlineStepState,
   SectionState,
   Step2State,
+  Step3State,
 } from '@/features/workspace/store';
 import MarkdownView from './MarkdownView';
 import SectionTreeView from './SectionTreeView';
@@ -29,6 +31,8 @@ export default function OutlinePanel() {
   const setSectionMarkdown = useWorkspaceStore((s) => s.setSectionMarkdown);
   const nextSection = useWorkspaceStore((s) => s.nextSection);
   const proceedToStep3 = useWorkspaceStore((s) => s.proceedToStep3);
+  const retryCurrentBody = useWorkspaceStore((s) => s.retryCurrentBody);
+  const nextBody = useWorkspaceStore((s) => s.nextBody);
   const resetOutline = useWorkspaceStore((s) => s.resetOutline);
 
   const { canGenerate, reason } = useMemo<{
@@ -58,16 +62,18 @@ export default function OutlinePanel() {
     };
   }, [files]);
 
-  const { step1, step2, currentStep } = outline;
+  const { step1, step2, step3, currentStep } = outline;
   const currentSection = step2.sections[step2.currentSectionIndex];
+  const currentBody = step3.bodies[step3.currentBodyIndex];
   const isStep1Generating = step1.status === 'generating';
   const isStep2Busy =
     step2.status === 'fetching-sections' ||
     currentSection?.status === 'generating';
+  const isStep3Busy = currentBody?.status === 'generating';
 
   const [elapsedSec, setElapsedSec] = useState(0);
   useEffect(() => {
-    const busy = isStep1Generating || isStep2Busy;
+    const busy = isStep1Generating || isStep2Busy || isStep3Busy;
     if (!busy) {
       setElapsedSec(0);
       return;
@@ -78,7 +84,7 @@ export default function OutlinePanel() {
       setElapsedSec(Math.floor((Date.now() - start) / 1000));
     }, 1000);
     return () => window.clearInterval(id);
-  }, [isStep1Generating, isStep2Busy]);
+  }, [isStep1Generating, isStep2Busy, isStep3Busy]);
 
   const hasAnything =
     step1.markdown != null || step2.sections.some((s) => s.markdown);
@@ -97,7 +103,12 @@ export default function OutlinePanel() {
                 자동 저장됨 (localStorage)
               </span>
             </h2>
-            <Stepper currentStep={currentStep} step1={step1} step2={step2} />
+            <Stepper
+              currentStep={currentStep}
+              step1={step1}
+              step2={step2}
+              step3={step3}
+            />
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {hasAnything && (
@@ -108,13 +119,17 @@ export default function OutlinePanel() {
               canGenerate={canGenerate}
               step1={step1}
               step2={step2}
+              step3={step3}
               currentSection={currentSection}
+              currentBody={currentBody}
               onStartStep1={generateStep1}
               onProceedToStep2={proceedToStep2}
               onRetryStep2Sections={retryStep2Sections}
               onRetryCurrentSection={retryCurrentSection}
               onNextSection={nextSection}
               onProceedToStep3={proceedToStep3}
+              onRetryCurrentBody={retryCurrentBody}
+              onNextBody={nextBody}
               onReset={resetOutline}
             />
           </div>
@@ -142,9 +157,7 @@ export default function OutlinePanel() {
           />
         )}
         {currentStep === 3 && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-gray-400">
-            Step 3 (본문 작성)은 다음 마일스톤에서 추가됩니다.
-          </div>
+          <Step3View step3={step3} elapsedSec={elapsedSec} />
         )}
       </div>
     </div>
@@ -208,13 +221,17 @@ interface HeaderActionsProps {
   canGenerate: boolean;
   step1: OutlineStepState;
   step2: Step2State;
+  step3: Step3State;
   currentSection: SectionState | undefined;
+  currentBody: BodyState | undefined;
   onStartStep1: () => void;
   onProceedToStep2: () => void;
   onRetryStep2Sections: () => void;
   onRetryCurrentSection: () => void;
   onNextSection: () => void;
   onProceedToStep3: () => void;
+  onRetryCurrentBody: () => void;
+  onNextBody: () => void;
   onReset: () => void;
 }
 
@@ -339,6 +356,58 @@ function HeaderActions(p: HeaderActionsProps) {
     return null;
   }
 
+  if (p.currentStep === 3) {
+    if (p.step3.status === 'error') return null;
+    if (p.step3.status === 'all-done') {
+      return (
+        <div className="flex shrink-0 gap-2">
+          <span className="rounded bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
+            ✓ 본문 작성 완료
+          </span>
+        </div>
+      );
+    }
+    const body = p.currentBody;
+    if (!body) return null;
+    const isLast = p.step3.currentBodyIndex === p.step3.bodies.length - 1;
+    if (body.status === 'generating') {
+      return (
+        <div className="flex shrink-0 gap-2">
+          <span className="rounded bg-blue-50 px-3 py-1.5 text-xs text-blue-700">
+            본문 생성 중…
+          </span>
+        </div>
+      );
+    }
+    if (body.status === 'error') {
+      return (
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={p.onRetryCurrentBody}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+          >
+            다시 시도
+          </button>
+        </div>
+      );
+    }
+    if (body.status === 'ready') {
+      return (
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={p.onNextBody}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+          >
+            {isLast ? '본문 완료' : '다음 중분류'}
+          </button>
+        </div>
+      );
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -384,15 +453,17 @@ interface StepperProps {
   currentStep: 1 | 2 | 3;
   step1: OutlineStepState;
   step2: Step2State;
+  step3: Step3State;
 }
 
-function Stepper({ currentStep, step1, step2 }: StepperProps) {
+function Stepper({ currentStep, step1, step2, step3 }: StepperProps) {
   const step1Done = step1.status === 'ready';
   const step2Done = step2.status === 'all-done';
+  const step3Done = step3.status === 'all-done';
   const items: { num: 1 | 2 | 3; label: string; done: boolean }[] = [
     { num: 1, label: '사전 분석', done: step1Done },
     { num: 2, label: '아웃라인 구조', done: step2Done },
-    { num: 3, label: '본문 작성', done: false },
+    { num: 3, label: '본문 작성', done: step3Done },
   ];
   return (
     <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
@@ -690,6 +761,152 @@ function ResultView({
         editable={!readOnly}
         onSave={onSave}
       />
+    </div>
+  );
+}
+
+// ─── Step 3 View — 본문 작성 ────────────────────────────────────────
+
+interface Step3ViewProps {
+  step3: Step3State;
+  elapsedSec: number;
+}
+
+function Step3View({ step3, elapsedSec }: Step3ViewProps) {
+  if (step3.status === 'error' && step3.error) {
+    return <ErrorView code={step3.error.code} message={step3.error.message} />;
+  }
+  if (step3.bodies.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-gray-400">
+        본문을 작성할 중분류가 없습니다. Step 2를 먼저 완료해주세요.
+      </div>
+    );
+  }
+
+  const current = step3.bodies[step3.currentBodyIndex]!;
+
+  return (
+    <div className="space-y-4">
+      {/* 진행 현황 */}
+      <div className="rounded border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700">
+        <div className="mb-2 font-medium">
+          본문 진행 {step3.currentBodyIndex + 1} / {step3.bodies.length} (중분류
+          단위)
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {step3.bodies.map((b, idx) => (
+            <BodyBadge
+              key={b.id}
+              body={b}
+              isCurrent={idx === step3.currentBodyIndex}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* 현재 중분류 정보 */}
+      <div className="rounded border border-blue-200 bg-blue-50/40 px-3 py-2">
+        <div className="text-xs text-blue-700">
+          📌 현재 작성 중: {current.ref.mainTitle}
+        </div>
+        <div className="mt-0.5 text-sm font-semibold text-blue-900">
+          {current.ref.midTitle}
+        </div>
+      </div>
+
+      {/* 본문 표시 */}
+      <CurrentBodyView body={current} elapsedSec={elapsedSec} />
+    </div>
+  );
+}
+
+function BodyBadge({
+  body,
+  isCurrent,
+}: {
+  body: BodyState;
+  isCurrent: boolean;
+}) {
+  const style =
+    body.status === 'ready'
+      ? 'bg-green-100 text-green-800 border-green-200'
+      : body.status === 'generating'
+        ? 'bg-blue-100 text-blue-800 border-blue-300'
+        : body.status === 'error'
+          ? 'bg-red-100 text-red-800 border-red-200'
+          : 'bg-gray-100 text-gray-600 border-gray-200';
+  const shortTitle = body.ref.midTitle
+    .replace(/^\[중분류[^\]]*\]\s*/, '')
+    .slice(0, 14);
+  return (
+    <span
+      className={`rounded border px-2 py-0.5 text-[10px] ${style} ${
+        isCurrent ? 'ring-2 ring-blue-400' : ''
+      }`}
+      title={`${body.ref.mainTitle} > ${body.ref.midTitle}`}
+    >
+      {body.ref.mainIndex}.{body.ref.midIndex + 1} {shortTitle}
+      {body.ref.midTitle.length > 14 ? '…' : ''}
+    </span>
+  );
+}
+
+function CurrentBodyView({
+  body,
+  elapsedSec,
+}: {
+  body: BodyState;
+  elapsedSec: number;
+}) {
+  if (body.status === 'pending') {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-gray-400">
+        시작 준비 중…
+      </div>
+    );
+  }
+  if (body.status === 'generating' && !body.markdown) {
+    return (
+      <ProgressView
+        title={`본문 생성 중: ${body.ref.midTitle}`}
+        elapsedSec={elapsedSec}
+      />
+    );
+  }
+  if (body.status === 'error' && body.error) {
+    return <ErrorView code={body.error.code} message={body.error.message} />;
+  }
+  if (body.markdown) {
+    const truncated = body.finishReason === 'length';
+    return (
+      <div className="space-y-3">
+        <div className="rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
+          모델: <span className="font-mono">{body.modelId}</span>
+          {body.elapsedMs != null && (
+            <> · 소요: {(body.elapsedMs / 1000).toFixed(1)}s</>
+          )}
+          {body.usage?.total_tokens != null && (
+            <> · 토큰: {body.usage.total_tokens.toLocaleString()}</>
+          )}
+          <> · 출력 {body.markdown.length.toLocaleString()}자</>
+        </div>
+        {truncated && <BodyTruncationNotice />}
+        <MarkdownView markdown={body.markdown} />
+      </div>
+    );
+  }
+  return null;
+}
+
+function BodyTruncationNotice() {
+  return (
+    <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      ⚠️ <span className="font-semibold">본문이 도중에 끊겼습니다</span>{' '}
+      (max_tokens 한도 도달). 마지막 단락이 미완성일 수 있습니다.
+      <span className="ml-1 text-amber-700">
+        이어서 작성 기능은 Phase B에서 추가됩니다 — 지금은 표시만.
+      </span>
     </div>
   );
 }
