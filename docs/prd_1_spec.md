@@ -343,10 +343,10 @@ export interface OutlineDocument {
   - [x] M7.2 — Step 2-A: 대분류 목록 추출 (`/api/outline/step2/sections`)
   - [x] M7.3 — Step 2-B: 영역별 상세 + 순회 UI (`/api/outline/step2/section`)
   - [ ] M7.4 — Step 3: Phase 2 본문 작성 (`prd_2_spec.md`로 이관)
-- [ ] **M8** — 아웃라인 인라인 편집 (마크다운 textarea + 미리보기 또는 트리 편집기)
-- [ ] **M9** — 드래그앤드롭 순서 변경 (`@dnd-kit`) — M8 결정에 따라 X 될 수도
-- [ ] **M10** — localStorage 저장 + JSON 내보내기
-- [ ] **M11** — 에러/로딩 상태 정리, 빈 상태 UI, README 업데이트
+- [x] **M8** — 아웃라인 트리 편집기 (중분류·소분류 add/remove/edit + 인라인 제목 편집, 가이드는 read-only)
+- [ ] **M9** — 드래그앤드롭 순서 변경 (`@dnd-kit`) — 필요 시점에 추가, 현재 보류
+- [x] **M10** — localStorage 자동 저장 (zustand persist) + Markdown/JSON 내보내기
+- [x] **M11** — 빈 상태 흐름 가이드 + README 전면 갱신 + 트러블슈팅 표
 
 ---
 

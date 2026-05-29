@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import {
   ApiError,
   fetchStep2Sections,
@@ -137,7 +138,9 @@ const errInfo = (err: unknown): { code: string; message: string } => ({
   message: err instanceof Error ? err.message : String(err),
 });
 
-export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist(
+    (set, get) => ({
   files: [],
   outline: initialOutline,
 
@@ -451,5 +454,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       outline: { ...state.outline, currentStep: 3 },
     })),
 
-  resetOutline: () => set({ outline: initialOutline }),
-}));
+      resetOutline: () => set({ outline: initialOutline }),
+    }),
+    {
+      name: 'proposal_writer.outline.v1',
+      storage: createJSONStorage(() => localStorage),
+      // files는 textContent가 커서 localStorage 한도(보통 5~10MB)를 위협하므로 제외.
+      // outline만 영구 저장 — 새로고침해도 편집한 트리/마크다운이 보존됨.
+      partialize: (state) => ({ outline: state.outline }),
+    },
+  ),
+);

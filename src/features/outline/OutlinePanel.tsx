@@ -8,6 +8,10 @@ import type {
 import MarkdownView from './MarkdownView';
 import SectionTreeView from './SectionTreeView';
 import { hasValidStructure, parseSection } from './sectionTree';
+import {
+  exportOutlineAsJson,
+  exportOutlineAsMarkdown,
+} from './exportOutline';
 
 const formatElapsed = (sec: number): string => {
   const m = Math.floor(sec / 60);
@@ -19,7 +23,6 @@ export default function OutlinePanel() {
   const files = useWorkspaceStore((s) => s.files);
   const outline = useWorkspaceStore((s) => s.outline);
   const generateStep1 = useWorkspaceStore((s) => s.generateStep1);
-  const setStep1Markdown = useWorkspaceStore((s) => s.setStep1Markdown);
   const proceedToStep2 = useWorkspaceStore((s) => s.proceedToStep2);
   const retryStep2Sections = useWorkspaceStore((s) => s.retryStep2Sections);
   const retryCurrentSection = useWorkspaceStore((s) => s.retryCurrentSection);
@@ -77,28 +80,44 @@ export default function OutlinePanel() {
     return () => window.clearInterval(id);
   }, [isStep1Generating, isStep2Busy]);
 
+  const hasAnything =
+    step1.markdown != null || step2.sections.some((s) => s.markdown);
+
+  const onExportJson = () => exportOutlineAsJson(outline);
+  const onExportMd = () => exportOutlineAsMarkdown(outline);
+
   return (
     <div className="flex h-full min-h-[400px] flex-col rounded-lg border border-gray-200 bg-white">
       <header className="border-b border-gray-200 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-gray-900">아웃라인</h2>
+            <h2 className="text-base font-semibold text-gray-900">
+              아웃라인{' '}
+              <span className="ml-2 text-[10px] font-normal text-gray-400">
+                자동 저장됨 (localStorage)
+              </span>
+            </h2>
             <Stepper currentStep={currentStep} step1={step1} step2={step2} />
           </div>
-          <HeaderActions
-            currentStep={currentStep}
-            canGenerate={canGenerate}
-            step1={step1}
-            step2={step2}
-            currentSection={currentSection}
-            onStartStep1={generateStep1}
-            onProceedToStep2={proceedToStep2}
-            onRetryStep2Sections={retryStep2Sections}
-            onRetryCurrentSection={retryCurrentSection}
-            onNextSection={nextSection}
-            onProceedToStep3={proceedToStep3}
-            onReset={resetOutline}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {hasAnything && (
+              <ExportMenu onJson={onExportJson} onMarkdown={onExportMd} />
+            )}
+            <HeaderActions
+              currentStep={currentStep}
+              canGenerate={canGenerate}
+              step1={step1}
+              step2={step2}
+              currentSection={currentSection}
+              onStartStep1={generateStep1}
+              onProceedToStep2={proceedToStep2}
+              onRetryStep2Sections={retryStep2Sections}
+              onRetryCurrentSection={retryCurrentSection}
+              onNextSection={nextSection}
+              onProceedToStep3={proceedToStep3}
+              onReset={resetOutline}
+            />
+          </div>
         </div>
       </header>
 
@@ -109,7 +128,7 @@ export default function OutlinePanel() {
             title="사전 분석 (벤치마킹 + 사업 수주 핵심 전략)"
             elapsedSec={elapsedSec}
             reason={reason}
-            onSave={setStep1Markdown}
+            // 사전 분석은 read-only 가이드 — onSave 미전달
           />
         )}
         {currentStep === 2 && (
@@ -128,6 +147,56 @@ export default function OutlinePanel() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Export menu ───────────────────────────────────────────────────
+
+function ExportMenu({
+  onJson,
+  onMarkdown,
+}: {
+  onJson: () => void;
+  onMarkdown: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+      >
+        내보내기 ▾
+      </button>
+      {open && (
+        <div className="absolute right-0 z-10 mt-1 w-40 rounded border border-gray-200 bg-white py-1 shadow-md">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onMarkdown();
+              setOpen(false);
+            }}
+            className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+          >
+            Markdown (.md)
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onJson();
+              setOpen(false);
+            }}
+            className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+          >
+            JSON (.json)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -273,6 +342,42 @@ function HeaderActions(p: HeaderActionsProps) {
   return null;
 }
 
+// ─── Idle guide (빈 상태 — 처음 사용자에게 흐름 안내) ─────────────
+
+function IdleGuide({ reason }: { reason: string }) {
+  return (
+    <div className="mx-auto flex h-full max-w-md flex-col justify-center gap-4 px-2 text-sm">
+      <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-xs text-blue-900">
+        <div className="font-semibold">💡 사용 흐름</div>
+        <ol className="mt-2 space-y-1 pl-4">
+          <li>
+            <span className="font-medium">1.</span> 좌측에 공고·양식 파일과
+            (선택) 회사 정보 파일 업로드
+          </li>
+          <li>
+            <span className="font-medium">2.</span>{' '}
+            <span className="font-semibold">Step 1</span> — 벤치마킹 + 사업 수주
+            핵심 전략 자동 생성
+          </li>
+          <li>
+            <span className="font-medium">3.</span>{' '}
+            <span className="font-semibold">Step 2</span> — 영역별 대분류 →
+            중분류·소분류 순차 작성 + 인라인 편집
+          </li>
+          <li>
+            <span className="font-medium">4.</span> Markdown / JSON
+            <span className="text-blue-700"> 내보내기</span>
+          </li>
+        </ol>
+      </div>
+      <div className="text-center text-gray-500">{reason}</div>
+      <div className="text-center text-[11px] text-gray-400">
+        ⚠️ 사내 LLM Gateway 호출 — VPN이 켜져 있어야 합니다.
+      </div>
+    </div>
+  );
+}
+
 // ─── Stepper ────────────────────────────────────────────────────────
 
 interface StepperProps {
@@ -329,11 +434,7 @@ interface StepViewProps {
 
 function StepView({ state, title, elapsedSec, reason, onSave }: StepViewProps) {
   if (state.status === 'idle') {
-    return (
-      <div className="flex h-full items-center justify-center text-center text-sm text-gray-400">
-        {reason}
-      </div>
-    );
+    return <IdleGuide reason={reason} />;
   }
   if (state.status === 'generating' && !state.markdown) {
     return <ProgressView title={title} elapsedSec={elapsedSec} />;
@@ -564,6 +665,7 @@ function ResultView({
   state: OutlineStepState;
   onSave?: (next: string) => void;
 }) {
+  const readOnly = !onSave;
   return (
     <div className="space-y-3">
       <div className="rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
@@ -576,9 +678,16 @@ function ResultView({
         )}
       </div>
       <TruncationWarning finishReason={state.finishReason} />
+      {readOnly && (
+        <div className="rounded border border-blue-200 bg-blue-50/60 px-3 py-2 text-xs text-blue-900">
+          📋 <span className="font-semibold">참고 자료</span> — 이 단계의 분석
+          결과는 다음 단계(Step 2)의 컨텍스트로 사용됩니다. 본 화면에서는
+          편집되지 않고, 헤더의 [내보내기]로 다운로드할 수 있습니다.
+        </div>
+      )}
       <MarkdownView
         markdown={state.markdown ?? ''}
-        editable={!!onSave}
+        editable={!readOnly}
         onSave={onSave}
       />
     </div>
