@@ -105,10 +105,12 @@ interface WorkspaceState {
   removeByName: (category: FileCategory, names: string[]) => void;
 
   generateStep1: () => Promise<void>;
+  setStep1Markdown: (markdown: string) => void;
   proceedToStep2: () => Promise<void>;
   retryStep2Sections: () => Promise<void>;
   generateCurrentSection: () => Promise<void>;
   retryCurrentSection: () => Promise<void>;
+  setSectionMarkdown: (index: number, markdown: string) => void;
   nextSection: () => Promise<void>;
   proceedToStep3: () => void;
   resetOutline: () => void;
@@ -397,6 +399,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   retryCurrentSection: async () => {
     await get().generateCurrentSection();
   },
+
+  setStep1Markdown: (markdown) =>
+    set((state) => ({
+      outline: {
+        ...state.outline,
+        step1: { ...state.outline.step1, markdown },
+      },
+    })),
+
+  setSectionMarkdown: (index, markdown) =>
+    set((state) => ({
+      outline: {
+        ...state.outline,
+        step2: {
+          ...state.outline.step2,
+          sections: state.outline.step2.sections.map((s, i) =>
+            i === index ? { ...s, markdown } : s,
+          ),
+        },
+      },
+    })),
 
   nextSection: async () => {
     const { outline } = get();

@@ -5,6 +5,9 @@ import type {
   SectionState,
   Step2State,
 } from '@/features/workspace/store';
+import MarkdownView from './MarkdownView';
+import SectionTreeView from './SectionTreeView';
+import { hasValidStructure, parseSection } from './sectionTree';
 
 const formatElapsed = (sec: number): string => {
   const m = Math.floor(sec / 60);
@@ -16,9 +19,11 @@ export default function OutlinePanel() {
   const files = useWorkspaceStore((s) => s.files);
   const outline = useWorkspaceStore((s) => s.outline);
   const generateStep1 = useWorkspaceStore((s) => s.generateStep1);
+  const setStep1Markdown = useWorkspaceStore((s) => s.setStep1Markdown);
   const proceedToStep2 = useWorkspaceStore((s) => s.proceedToStep2);
   const retryStep2Sections = useWorkspaceStore((s) => s.retryStep2Sections);
   const retryCurrentSection = useWorkspaceStore((s) => s.retryCurrentSection);
+  const setSectionMarkdown = useWorkspaceStore((s) => s.setSectionMarkdown);
   const nextSection = useWorkspaceStore((s) => s.nextSection);
   const proceedToStep3 = useWorkspaceStore((s) => s.proceedToStep3);
   const resetOutline = useWorkspaceStore((s) => s.resetOutline);
@@ -104,6 +109,7 @@ export default function OutlinePanel() {
             title="사전 분석 (벤치마킹 + 사업 수주 핵심 전략)"
             elapsedSec={elapsedSec}
             reason={reason}
+            onSave={setStep1Markdown}
           />
         )}
         {currentStep === 2 && (
@@ -111,6 +117,9 @@ export default function OutlinePanel() {
             step2={step2}
             step1Markdown={step1.markdown}
             elapsedSec={elapsedSec}
+            onSaveSection={(md) =>
+              setSectionMarkdown(step2.currentSectionIndex, md)
+            }
           />
         )}
         {currentStep === 3 && (
@@ -315,9 +324,10 @@ interface StepViewProps {
   title: string;
   elapsedSec: number;
   reason: string;
+  onSave?: (next: string) => void;
 }
 
-function StepView({ state, title, elapsedSec, reason }: StepViewProps) {
+function StepView({ state, title, elapsedSec, reason, onSave }: StepViewProps) {
   if (state.status === 'idle') {
     return (
       <div className="flex h-full items-center justify-center text-center text-sm text-gray-400">
@@ -332,7 +342,7 @@ function StepView({ state, title, elapsedSec, reason }: StepViewProps) {
     return <ErrorView code={state.error.code} message={state.error.message} />;
   }
   if (state.markdown) {
-    return <ResultView state={state} />;
+    return <ResultView state={state} onSave={onSave} />;
   }
   return null;
 }
@@ -343,9 +353,15 @@ interface Step2ViewProps {
   step2: Step2State;
   step1Markdown: string | null;
   elapsedSec: number;
+  onSaveSection?: (next: string) => void;
 }
 
-function Step2View({ step2, step1Markdown, elapsedSec }: Step2ViewProps) {
+function Step2View({
+  step2,
+  step1Markdown,
+  elapsedSec,
+  onSaveSection,
+}: Step2ViewProps) {
   if (step2.status === 'fetching-sections') {
     return <ProgressView title="대분류 목록 추출 중" elapsedSec={elapsedSec} />;
   }
@@ -368,9 +384,9 @@ function Step2View({ step2, step1Markdown, elapsedSec }: Step2ViewProps) {
           <summary className="cursor-pointer font-medium text-gray-800">
             Step 1 결과 (벤치마킹 + 핵심 전략)
           </summary>
-          <pre className="mt-2 overflow-auto whitespace-pre-wrap font-sans text-xs text-gray-700">
-            {step1Markdown}
-          </pre>
+          <div className="mt-2">
+            <MarkdownView markdown={step1Markdown} />
+          </div>
         </details>
       )}
 
@@ -394,6 +410,7 @@ function Step2View({ step2, step1Markdown, elapsedSec }: Step2ViewProps) {
       <CurrentSectionView
         section={step2.sections[step2.currentSectionIndex]!}
         elapsedSec={elapsedSec}
+        onSave={onSaveSection}
       />
 
       {/* 완료된 이전 대분류들 (접힘) */}
@@ -408,9 +425,9 @@ function Step2View({ step2, step1Markdown, elapsedSec }: Step2ViewProps) {
             <summary className="cursor-pointer font-medium text-gray-800">
               ✓ [대분류 {s.index}] {s.title}
             </summary>
-            <pre className="mt-2 overflow-auto whitespace-pre-wrap font-sans text-xs text-gray-700">
-              {s.markdown}
-            </pre>
+            <div className="mt-2">
+              <MarkdownView markdown={s.markdown ?? ''} />
+            </div>
           </details>
         ))}
     </div>
@@ -447,9 +464,11 @@ function SectionBadge({
 function CurrentSectionView({
   section,
   elapsedSec,
+  onSave,
 }: {
   section: SectionState;
   elapsedSec: number;
+  onSave?: (next: string) => void;
 }) {
   if (section.status === 'generating' && !section.markdown) {
     return (
@@ -463,6 +482,8 @@ function CurrentSectionView({
     return <ErrorView code={section.error.code} message={section.error.message} />;
   }
   if (section.markdown) {
+    const parsed = parseSection(section.markdown);
+    const useTree = hasValidStructure(parsed);
     return (
       <div className="space-y-3">
         <div className="rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
@@ -475,9 +496,15 @@ function CurrentSectionView({
           )}
         </div>
         <TruncationWarning finishReason={section.finishReason} />
-        <pre className="overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-white p-4 font-sans text-sm leading-relaxed text-gray-800">
-          {section.markdown}
-        </pre>
+        {useTree && onSave ? (
+          <SectionTreeView markdown={section.markdown} onSave={onSave} />
+        ) : (
+          <MarkdownView
+            markdown={section.markdown}
+            editable={!!onSave}
+            onSave={onSave}
+          />
+        )}
       </div>
     );
   }
@@ -530,7 +557,13 @@ function ErrorView({ code, message }: { code: string; message: string }) {
   );
 }
 
-function ResultView({ state }: { state: OutlineStepState }) {
+function ResultView({
+  state,
+  onSave,
+}: {
+  state: OutlineStepState;
+  onSave?: (next: string) => void;
+}) {
   return (
     <div className="space-y-3">
       <div className="rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
@@ -543,9 +576,11 @@ function ResultView({ state }: { state: OutlineStepState }) {
         )}
       </div>
       <TruncationWarning finishReason={state.finishReason} />
-      <pre className="overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-white p-4 font-sans text-sm leading-relaxed text-gray-800">
-        {state.markdown}
-      </pre>
+      <MarkdownView
+        markdown={state.markdown ?? ''}
+        editable={!!onSave}
+        onSave={onSave}
+      />
     </div>
   );
 }
