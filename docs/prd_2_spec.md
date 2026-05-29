@@ -128,16 +128,21 @@ Phase 1 종료: 아웃라인 트리 확정
 - 큐 기반: 대기열 → 4개 워커가 가져가서 실행
 - "정지" 버튼은 새 호출 막고 진행 중인 건 끝까지
 
-#### 입력 구성 (캐시 블록 분리)
-- **System** (캐시): prd_2.md의 [System Role] + [Expert Writing Rules]
-- **User 캐시 블록**:
-  - `<announcement_documents>...</announcement_documents>` — 공고/양식 텍스트
-  - `<company_documents>...</company_documents>` — 회사 정보 텍스트 (사용자가 토글로 제외한 파일은 빼고 전송)
-  - `<proposal_strategy>...</proposal_strategy>` — §5.2 결과 (funderNeeds/differentiators/benchmarks)
-- **User 비캐시(노드별)**:
-  - `<target_section>{title, description, ancestry}</target_section>` — 현재 작성 대상
-  - `<assigned_company_sources>{fileIds}</assigned_company_sources>` — 사용자가 확정한 매칭 결과
-  - "위 규칙과 4단계 사고 과정을 따라 본문을 작성하라"
+#### 입력 구성 (프롬프트 파일 외부화)
+- **시스템 프롬프트는 별도 파일에서 런타임 로드**:
+  - 위치: `prompts/body_phase2.md` (repo root)
+  - 원본: prd_2.md의 `[System Role]` ~ `(본문 작성 시 활용한 외부 검색 데이터의 원본 링크 및 출처 명시…)` 전체
+  - 로더: `server/src/llm/prompts.ts`의 `loadAndRenderPrompt(name, vars)` — Phase 1과 공유
+  - **운영 의의**: 프롬프트 파일만 수정해도 다음 호출부터 출력 반영. 코드 재배포 불필요.
+- **변수 (사용자 원본 [Input Data] 기준 3개)**:
+  - `{{proposal_strategy}}` ← §5.2 결과 (funderNeeds·differentiators·benchmarks) 직렬화
+  - `{{target_section}}` ← 현재 노드 정보 (title, description, ancestry)
+  - `{{assigned_company_sources}}` ← 사용자가 확정한 매칭 회사 자료 (자동 매칭 + 토글 후 결과)
+- **Prompt caching**:
+  - 프롬프트 파일의 `[System Role]` ~ `[Expert Writing Rules]` ~ `[Instructions]` (정적 부분)은 세션 동안 동일 → cache 적중
+  - `{{proposal_strategy}}`도 세션 동안 동일 → 캐시 가능
+  - `{{target_section}}` / `{{assigned_company_sources}}`만 노드별로 변동 → 캐시 prefix 종료점
+  - 구체적인 캐시 블록 경계는 M14·M15 구현 시점에 LLM 프로바이더의 caching API에 맞춰 결정
 
 #### 자사 자료 매칭 (자동 + 사용자 수정)
 - §5.2의 `nodeReferences[nodeId]`를 기본값으로 사용 (LLM 자동 매칭).
@@ -282,6 +287,11 @@ M7에서 LLM이 정해진 후 같은 진영(A 또는 B)을 기본으로 채택. 
 
 ### 6.4 디렉토리 추가
 ```
+prompts/                            # 외부 관리 프롬프트 .md (repo root)
+├── outline_phase1.md               # Phase 1 (이미 추가)
+├── body_phase2.md                  # Phase 2 본문 생성 (이미 추가)
+└── strategy_phase2.md              # Phase 2 전략 요약 (M14에서 추가)
+
 src/
 ├── features/
 │   ├── draft/
@@ -304,11 +314,9 @@ server/
 │   │   ├── strategy.ts         # POST /api/strategy/generate
 │   │   └── body.ts             # POST /api/body/generate
 │   ├── llm/
+│   │   ├── prompts.ts          # 프롬프트 로더 (이미 추가, Phase 1·2 공유)
 │   │   ├── provider.ts         # LlmProvider 인터페이스
-│   │   ├── anthropic.ts        # (혹은) gemini.ts
-│   │   └── prompts/
-│   │       ├── strategy.ts
-│   │       └── body.ts
+│   │   └── anthropic.ts        # (혹은) gemini.ts
 │   └── search/
 │       └── client.ts           # 채택한 검색 옵션 래퍼
 ```
@@ -341,17 +349,22 @@ server/
 - 클라이언트는 응답의 `usage`를 `UsageTotals`에 즉시 누적 → UsageBadge 갱신.
 
 ### `POST /api/body/generate`
-- Body:
+- Body (사용자 원본 프롬프트의 [Input Data] 3개와 1:1 매핑):
   ```json
   {
     "node": { "id": "1.1", "title": "...", "description": "...", "ancestry": ["1. 사업 개요"] },
     "strategy": {/* ProposalStrategy */},
-    "announcementFiles": [/* 캐시키 동일하게 사용 */],
-    "companyFiles":      [/* 캐시키 동일하게 사용 */],
-    "companyFileIds":    ["fileId-a", "fileId-b"]
+    "assignedCompanySources": [
+      { "name": "company_profile.pdf", "text": "..." },
+      { "name": "revenue_2024.xlsx",   "text": "..." }
+    ]
   }
   ```
-- `companyFiles`는 캐시 동일성을 위해 항상 전체 전달, `companyFileIds`로 본 호출에서 실제 활용할 파일을 LLM에 지시.
+- 서버는 위 3개 입력을 `prompts/body_phase2.md`의 3개 변수로 직렬화하여 채움:
+  - `{{proposal_strategy}}` ← `strategy` 포맷팅
+  - `{{target_section}}` ← `node` 포맷팅
+  - `{{assigned_company_sources}}` ← 파일별 텍스트를 `[파일명]\n본문\n` 형태로 직렬화
+- 사용자 토글 결과는 **클라이언트가 미리 필터링**한 후 `assignedCompanySources` 배열로 전송 (서버는 파일 corpus를 영구 보관 안 함, Phase 1 정책 동일).
 - Response:
   ```json
   {

@@ -104,22 +104,57 @@
 
 > 구현 시점에 각 라이브러리 안정성 검증 필요. 실패 케이스는 명확한 에러 메시지로 사용자에게 반환.
 
-### 5.3 아웃라인 생성 (LLM)
-- 모델: **`claude-sonnet-4-6`** 기본 (가성비 + 긴 컨텍스트). 정밀도가 더 필요하면 Opus로 교체.
-- **Prompt caching** 활용: 시스템 프롬프트 + 양식 문서 텍스트를 캐시 블록으로 묶어 재호출 비용 절감.
-- **구조화 출력**: Anthropic SDK의 **tool use** 기능으로 트리 스키마(아래 §7.2)를 강제.
-- 입력 구성:
-  - System: "당신은 사업계획서/제안서 아웃라인 설계자입니다. ..."
-  - User content:
-    - `<announcement_documents>` ... `</announcement_documents>` — 카테고리 A 파일들의 텍스트 (캐시)
-    - `<company_documents>` ... `</company_documents>` — 카테고리 B 파일들의 텍스트
-    - "위 자료를 바탕으로 아래 규칙을 따라 아웃라인을 생성하라:" + 규칙들
-- 규칙:
-  1. **양식 파일에 명시된 작성 항목이 있으면 그것을 1순위 골격으로 사용**한다
-  2. 공고에 있지만 양식에 없는 요구사항은 누락 없이 추가한다
-  3. 회사 정보는 어디서 활용될 수 있는지 노드의 `description`에 힌트로 적는다
-  4. 깊이는 최대 4단계 (대/중/소/세)
-  5. 모든 노드에 `id`(UUID), `title`, `source`(announcement/template/derived)를 포함한다
+### 5.3 아웃라인 생성 (LLM) — 3-Step 분할 흐름
+
+> 큰 입력에서 게이트웨이 504/502가 빈번해, prd_1.md의 단일 호출을 **사용자 확인 단계가 있는 3-Step**으로 분할. prd_1.md 원본 프롬프트는 source of truth로 보존하되, 운영에서는 step별 변형 프롬프트를 사용.
+
+**인프라**:
+- 모델 라우팅: 사내 **Envoy AI Gateway** (OpenAI Chat Completions 호환). `openai` SDK 사용. 가이드: inflab.atlassian.net/wiki/spaces/DO/pages/2739896334
+- `OPENAI_API_KEY` = 사용자 이메일 (로컬) 또는 서비스 이름 (k8s). `OPENAI_BASE_URL`은 환경별 게이트웨이 URL.
+- 모델은 `OPENAI_MODEL` env. 기본 `claude-4.5-sonnet`. `.env` 한 줄로 Claude/Gemini/GPT 교체 가능.
+
+**프롬프트 외부화**:
+- 모든 프롬프트는 `prompts/` 디렉토리의 `.md` 파일로 외부 관리.
+- 매 호출마다 디스크에서 읽어 변수 치환 (`server/src/llm/prompts.ts#loadAndRenderPrompt`). 파일만 수정해도 다음 호출부터 즉시 반영.
+
+#### Step 1 — 사전 분석
+- 프롬프트: `prompts/outline_step1.md`
+- 엔드포인트: `POST /api/outline/step1`
+- 입력: announcement·company 파일 텍스트
+- 출력: 마크다운 prose
+  - 🔍 벤치마킹 분석 보고서
+  - 🎯 사업 수주 핵심 전략 (Executive Summary)
+- 출력 짧음 (1~2k자), 빠름 (10~30초)
+- 사용자가 보고 [다음: Step 2] 클릭
+
+#### Step 2-A — 대분류 목록 추출
+- 프롬프트: `prompts/outline_step2_sections.md`
+- 엔드포인트: `POST /api/outline/step2/sections`
+- 입력: announcement·company 파일 + Step 1 markdown
+- 출력: `[대분류 N] 제목` 한 줄씩 (서버에서 정규식 파싱하여 `{index, title}[]` 반환)
+- 출력 짧음, 빠름
+
+#### Step 2-B — 영역별 상세 (대분류 N회 반복)
+- 프롬프트: `prompts/outline_step2_section.md`
+- 엔드포인트: `POST /api/outline/step2/section`
+- 입력: 자료들 + Step 1 markdown + 전체 대분류 목록 + `currentSection`(제목)
+- 출력: 해당 대분류 한 영역의 중분류·소분류 + 각 노드의 "포함될 자사 소스 및 벤치마킹 적용안"
+- 출력 적당 (500~2000자/영역), 빠름 (20~60초)
+- 사용자가 보고 [다음: 대분류 N+1] 클릭하면 다음 영역. 마지막 영역에서 [Step 3로] 클릭.
+
+#### Step 3 — 본문 작성 (Phase 2 본문)
+- prd_2.md / prd_2_spec.md 참조.
+
+**프롬프트 변수**:
+| 프롬프트 | 변수 |
+|----------|------|
+| outline_step1 | `{{announcement_documents}}` `{{template_documents}}` `{{company_documents}}` |
+| outline_step2_sections | 위 + `{{step1_markdown}}` |
+| outline_step2_section | 위 + `{{all_sections}}` `{{current_section}}` |
+
+**`template_documents` 처리**: 현 UI는 공고/양식을 단일 announcement 카테고리로 받음. 그래서 `template_documents`에는 텍스트를 다시 넣지 않고 "위 1번 자료에 양식 포함" 안내 문구만 채움 (입력 크기 2배 부풀림 방지 → 502 회피).
+
+**stream 사용 안 함**: 사내 게이트웨이가 OpenAI streaming에서 Premature close 빈발. 현재는 모든 호출 `stream:false` + 짧은 출력 강제로 우회. 향후 스트리밍 지원이 안정화되면 영역별 호출에 도입 검토.
 
 ### 5.4 트리 표시/편집
 - 라이브러리 후보: `@dnd-kit/core` + 자체 트리 컴포넌트 (가벼움) — Phase 1은 외부 트리 라이브러리 없이 자체 구현 권장
@@ -224,28 +259,23 @@ proposal_writer/
   { "error": { "code": "INVALID_CATEGORY | NO_FILES | MULTER_LIMIT_FILE_SIZE | ...", "message": "..." } }
   ```
 
-#### `POST /api/outline/generate`
-- Content-Type: `application/json`
-- Body:
-  ```json
-  {
-    "announcementFiles": [/* ParsedFile[] */],
-    "companyFiles":      [/* ParsedFile[] */],
-    "options": { "maxDepth": 4 }
-  }
-  ```
-- Response (200):
-  ```json
-  {
-    "outline": {
-      "rootNodes": [/* OutlineNode[] */],
-      "generatedAt": "2026-05-27T05:00:00Z",
-      "modelId": "claude-sonnet-4-6",
-      "inputFileIds": ["..."]
-    },
-    "usage": { "inputTokens": 12345, "outputTokens": 678, "cacheReadTokens": 9000 }
-  }
-  ```
+#### `POST /api/outline/step1`
+- Body: `{ announcementFiles, companyFiles }` (각각 `ParsedFile[]`)
+- Response: `{ markdown, modelId, generatedAt, finishReason, usage, elapsedMs, inputFileIds }`
+- 출력 마크다운: 🔍 벤치마킹 + 🎯 Executive Summary
+
+#### `POST /api/outline/step2/sections`
+- Body: `{ announcementFiles, companyFiles, step1Markdown }`
+- Response: `{ sections: [{ index, title }], markdown, modelId, generatedAt, usage, elapsedMs }`
+- 서버가 LLM 응답에서 `[대분류 N] 제목` 패턴을 정규식 파싱해 `sections[]`로 반환
+
+#### `POST /api/outline/step2/section`
+- Body: `{ announcementFiles, companyFiles, step1Markdown, allSectionTitles, currentSection }`
+- Response: `{ markdown, currentSection, modelId, generatedAt, finishReason, usage, elapsedMs }`
+- 출력 마크다운: 해당 대분류 한 영역의 중분류·소분류 + 자사 소스 매핑
+
+#### `POST /api/outline/generate` (레거시)
+- 큰 입력에서 502 빈번. split 흐름 정착 후 제거 예정.
 
 ### 7.2 TypeScript 타입 (프론트/서버 공유)
 
@@ -302,15 +332,19 @@ export interface OutlineDocument {
 
 > 위에서 아래로, 각 단계는 독립적으로 PR 단위.
 
-- [ ] **M1** — 백엔드 스캐폴드: `server/` 생성, Express + TS 부트스트랩, `/api/health` 응답
-- [ ] **M2** — Vite proxy 연결 + 프론트의 `src/lib/api.ts` 클라이언트 골격
-- [ ] **M3** — 파일 업로드 UI (좌측 두 섹션, 드래그앤드롭, 리스트, 삭제)
-- [ ] **M4** — `/api/files/parse` 엔드포인트 + 포맷별 파서 (PDF/DOCX/TXT/MD 우선 → XLSX/PPTX → HWP/HWPX 순)
-- [ ] **M5** — 우측 아웃라인 패널 UI (정적 더미 트리)
-- [ ] **M6** — Zustand 스토어 (파일/아웃라인 상태)
-- [ ] **M7** — `/api/outline/generate` + Claude SDK 연동 (tool use로 스키마 강제, prompt caching)
-- [ ] **M8** — 아웃라인 트리 인라인 편집 (제목 수정, 추가/삭제/이동)
-- [ ] **M9** — 드래그앤드롭 순서 변경 (`@dnd-kit`)
+- [x] **M1** — 백엔드 스캐폴드: `server/` 생성, Express + TS 부트스트랩, `/api/health` 응답
+- [x] **M2** — Vite proxy 연결 + 프론트의 `src/lib/api.ts` 클라이언트 골격
+- [x] **M3** — 파일 업로드 UI (좌측 두 섹션, 드래그앤드롭, 리스트, 삭제)
+- [x] **M4** — `/api/files/parse` 엔드포인트 + 포맷별 파서 (officeparser 통합 + HWPX 자체)
+- [x] **M5** — 우측 아웃라인 패널 UI (정적 더미 트리는 후속에 갈음)
+- [x] **M6** — Zustand 스토어 (파일/아웃라인 상태) + 서버 업로드 연결
+- [x] **M7** — 사내 LLM Gateway(OpenAI 호환) 연동 + 3-Step 분할 흐름
+  - [x] M7.1 — Step 1: 사전 분석 (`/api/outline/step1`)
+  - [x] M7.2 — Step 2-A: 대분류 목록 추출 (`/api/outline/step2/sections`)
+  - [x] M7.3 — Step 2-B: 영역별 상세 + 순회 UI (`/api/outline/step2/section`)
+  - [ ] M7.4 — Step 3: Phase 2 본문 작성 (`prd_2_spec.md`로 이관)
+- [ ] **M8** — 아웃라인 인라인 편집 (마크다운 textarea + 미리보기 또는 트리 편집기)
+- [ ] **M9** — 드래그앤드롭 순서 변경 (`@dnd-kit`) — M8 결정에 따라 X 될 수도
 - [ ] **M10** — localStorage 저장 + JSON 내보내기
 - [ ] **M11** — 에러/로딩 상태 정리, 빈 상태 UI, README 업데이트
 
@@ -331,4 +365,10 @@ export interface OutlineDocument {
 
 - HWP(구버전 바이너리) 파싱 실패 시 폴백 정책 — 사용자에게 변환 안내만 할지, 서버에서 변환 시도까지 할지
 - 이미지 기반 PDF 처리 — Phase 1은 OCR 미포함. 빈 추출 결과를 어떻게 사용자에게 알릴지
-- 아웃라인 생성 결과가 부실할 때의 **재생성 옵션** (전체 재생성 vs 부분 재생성) — Phase 1은 전체 재생성만
+- **아웃라인 인라인 편집** — 현재는 LLM 응답 마크다운을 `<pre>`로 표시만. 사용자가 트리 형태로 편집·재정렬·항목 추가/삭제하는 UX는 후속 마일스톤에서. 옵션:
+  - 마크다운 textarea + 라이브 미리보기
+  - 마크다운→JSON 트리 파싱 후 트리 편집기
+- **웹 검색 인프라** — 프롬프트 Step A가 "실시간 우수 사례 검색"을 명시. 현재는 모델 학습 지식으로만 응답. 사내 게이트웨이의 web search tool 지원 여부 확인 후 통합. Phase 2 본문 생성과 같은 인프라 공유.
+- **`announcement` 카테고리 분리** — prd_1.md/프롬프트는 [Input Data]에서 공고문과 양식을 두 변수로 분리하지만, 현재 UI는 단일 섹션이고 `template_documents` 변수에는 안내문만 채움. 업로드 섹션을 3개로 늘리는 것이 LLM 입력 명확도엔 좋으나 UX 부담 ↑ — 후속 검토.
+- **재생성 옵션** — 현재는 Step별로 [다시 시도]만. 영역별 일부 재생성(예: 대분류 3번만 다시)은 이미 가능하나, 전체 흐름 리셋과의 관계 정리 필요.
+- **사내 게이트웨이 streaming** — `stream:true` 요청 시 Premature close 빈발. 현재 모든 호출 비스트리밍. 추후 게이트웨이 측 안정화되면 영역별 호출에 stream 도입 (체감 속도 ↑).

@@ -12,6 +12,24 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_FILES },
 });
 
+// multer 기본 originalname 디코딩이 latin1이라 한글 파일명이 mojibake로 들어옴.
+// latin1로 재해석 → utf8 디코딩 했을 때 한글(완성형 or 자모 NFD)이 등장하면 그게 진짜 이름.
+// macOS Finder는 한글 파일명을 NFD(자모 분리)로 저장하므로 자모 영역도 매칭에 포함.
+// 디코딩 후 NFC로 정규화하여 클라이언트(NFC)와 매칭 가능하게 만듦.
+// ASCII만 있는 경우엔 원본 raw 그대로.
+const KOREAN_RE = /[가-힯ᄀ-ᇿ㄰-㆏]/;
+const decodeOriginalName = (raw: string): string => {
+  try {
+    const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+    if (KOREAN_RE.test(decoded) && !decoded.includes('�')) {
+      return decoded.normalize('NFC');
+    }
+    return raw.normalize('NFC');
+  } catch {
+    return raw;
+  }
+};
+
 type FileCategory = 'announcement' | 'company';
 
 interface ParsedFileResponse {
@@ -59,11 +77,12 @@ filesRouter.post(
       const errors: FileError[] = [];
 
       for (const f of incoming) {
+        const name = decodeOriginalName(f.originalname);
         try {
-          const result = await parseFile(f.buffer, f.originalname);
+          const result = await parseFile(f.buffer, name);
           files.push({
             id: randomUUID(),
-            name: f.originalname,
+            name,
             category,
             mimeType: f.mimetype,
             size: f.size,
@@ -73,14 +92,10 @@ filesRouter.post(
           });
         } catch (err) {
           if (err instanceof ApiError) {
-            errors.push({
-              fileName: f.originalname,
-              code: err.code,
-              message: err.message,
-            });
+            errors.push({ fileName: name, code: err.code, message: err.message });
           } else {
             errors.push({
-              fileName: f.originalname,
+              fileName: name,
               code: 'PARSE_FAILED',
               message: err instanceof Error ? err.message : String(err),
             });

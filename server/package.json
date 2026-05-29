@@ -15,7 +15,8 @@
     "express": "^5.0.1",
     "jszip": "^3.10.1",
     "multer": "^2.0.0",
-    "officeparser": "^5.1.1"
+    "officeparser": "^5.1.1",
+    "openai": "^4.77.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

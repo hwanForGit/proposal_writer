@@ -13,8 +13,24 @@ export const config = {
   port: Number(optional('PORT', '3001')),
   corsOrigin: optional('CORS_ORIGIN', 'http://localhost:5173'),
   nodeEnv: optional('NODE_ENV', 'development'),
-  // Phase 1 M7 시점에 require로 승격
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
+
+  // 사내 LLM Gateway (OpenAI-compatible)
+  openaiApiKey: process.env.OPENAI_API_KEY ?? '',
+  openaiBaseUrl: optional(
+    'OPENAI_BASE_URL',
+    'https://ai-gateway.devinflab.com/v1',
+  ),
+  openaiModel: optional('OPENAI_MODEL', 'claude-4.5-sonnet'),
 };
+
+export const requireLlmConfig = (): {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+} => ({
+  apiKey: required('OPENAI_API_KEY'),
+  baseUrl: required('OPENAI_BASE_URL'),
+  model: config.openaiModel,
+});
 
 export { required, optional };
