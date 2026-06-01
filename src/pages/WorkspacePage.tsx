@@ -20,8 +20,8 @@ export default function WorkspacePage() {
   );
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <div className="space-y-8">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(280px,340px)_1fr]">
+      <aside className="space-y-6">
         <UploadSection
           category="announcement"
           files={announcement}
@@ -38,7 +38,7 @@ export default function WorkspacePage() {
           onRemove={removeFile}
           onReplaceByName={(names) => removeByName('company', names)}
         />
-      </div>
+      </aside>
       <OutlinePanel />
     </div>
   );

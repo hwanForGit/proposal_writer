@@ -162,7 +162,11 @@ interface WorkspaceState {
   continueCurrentBody: () => Promise<void>;
   setBodyMarkdown: (index: number, markdown: string) => void;
   nextBody: () => Promise<void>;
+  setCurrentStep: (step: 1 | 2 | 3) => void;
+  setCurrentSectionIndex: (index: number) => void;
+  setCurrentBodyIndex: (index: number) => void;
   resetOutline: () => void;
+  resetAll: () => void;
 }
 
 const buildLlmInputs = (files: WorkspaceFile[]) => {
@@ -824,26 +828,71 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     await get().generateCurrentBody();
   },
 
+      setCurrentStep: (step) =>
+        set((state) => ({
+          outline: { ...state.outline, currentStep: step },
+        })),
+
+      setCurrentSectionIndex: (index) =>
+        set((state) => {
+          if (
+            index < 0 ||
+            index >= state.outline.step2.sections.length
+          )
+            return state;
+          return {
+            outline: {
+              ...state.outline,
+              step2: { ...state.outline.step2, currentSectionIndex: index },
+            },
+          };
+        }),
+
+      setCurrentBodyIndex: (index) =>
+        set((state) => {
+          if (index < 0 || index >= state.outline.step3.bodies.length)
+            return state;
+          return {
+            outline: {
+              ...state.outline,
+              step3: { ...state.outline.step3, currentBodyIndex: index },
+            },
+          };
+        }),
+
       resetOutline: () => set({ outline: initialOutline }),
+
+      resetAll: () => set({ files: [], outline: initialOutline }),
     }),
     {
       name: 'proposal_writer.outline.v1',
       storage: createJSONStorage(() => localStorage),
-      // files는 textContent가 커서 localStorage 한도(보통 5~10MB)를 위협하므로 제외.
-      // outline만 영구 저장 — 새로고침해도 편집한 트리/마크다운이 보존됨.
-      partialize: (state) => ({ outline: state.outline }),
-      // 스토어 모양이 진화할 때 옛 데이터에 누락된 필드를 기본값으로 채워 throw 방지.
-      version: 2,
+      // files는 parsed 상태만 저장 (textContent 포함, 보통 50KB 정도 × N).
+      // outline + files 둘 다 영구 저장 → 새로고침/슬립 후에도 그대로 복원.
+      partialize: (state) => ({
+        outline: state.outline,
+        files: state.files.filter((f) => f.status === 'parsed'),
+      }),
+      // 스토어 모양 진화 시 누락 필드를 기본값으로 채워 throw 방지.
+      version: 3,
       migrate: (persistedState) => {
-        const s = persistedState as { outline?: Partial<OutlineState> } | null;
-        if (!s || !s.outline) return { outline: initialOutline };
-        const outline: OutlineState = {
-          currentStep: s.outline.currentStep ?? 1,
-          step1: s.outline.step1 ?? { ...initialStep },
-          step2: s.outline.step2 ?? { ...initialStep2 },
-          step3: s.outline.step3 ?? { ...initialStep3 },
-        };
-        return { outline };
+        const s = persistedState as {
+          outline?: Partial<OutlineState>;
+          files?: WorkspaceFile[];
+        } | null;
+        if (!s) return { outline: initialOutline, files: [] };
+        const outline: OutlineState = s.outline
+          ? {
+              currentStep: s.outline.currentStep ?? 1,
+              step1: s.outline.step1 ?? { ...initialStep },
+              step2: s.outline.step2 ?? { ...initialStep2 },
+              step3: s.outline.step3 ?? { ...initialStep3 },
+            }
+          : initialOutline;
+        const files = Array.isArray(s.files)
+          ? s.files.filter((f) => f.status === 'parsed')
+          : [];
+        return { outline, files };
       },
     },
   ),

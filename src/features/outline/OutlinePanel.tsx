@@ -35,7 +35,12 @@ export default function OutlinePanel() {
   const continueCurrentBody = useWorkspaceStore((s) => s.continueCurrentBody);
   const setBodyMarkdown = useWorkspaceStore((s) => s.setBodyMarkdown);
   const nextBody = useWorkspaceStore((s) => s.nextBody);
-  const resetOutline = useWorkspaceStore((s) => s.resetOutline);
+  const setCurrentStep = useWorkspaceStore((s) => s.setCurrentStep);
+  const setCurrentSectionIndex = useWorkspaceStore(
+    (s) => s.setCurrentSectionIndex,
+  );
+  const setCurrentBodyIndex = useWorkspaceStore((s) => s.setCurrentBodyIndex);
+  const resetAll = useWorkspaceStore((s) => s.resetAll);
 
   const { canGenerate, reason } = useMemo<{
     canGenerate: boolean;
@@ -110,9 +115,22 @@ export default function OutlinePanel() {
               step1={step1}
               step2={step2}
               step3={step3}
+              onJump={setCurrentStep}
             />
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {hasAnything && (
+              <ResetButton
+                onReset={() => {
+                  if (
+                    window.confirm(
+                      '아웃라인 작업과 업로드한 파일을 모두 지웁니다. 계속할까요?',
+                    )
+                  )
+                    resetAll();
+                }}
+              />
+            )}
             {hasAnything && (
               <ExportMenu onJson={onExportJson} onMarkdown={onExportMd} />
             )}
@@ -132,7 +150,6 @@ export default function OutlinePanel() {
               onProceedToStep3={proceedToStep3}
               onRetryCurrentBody={retryCurrentBody}
               onNextBody={nextBody}
-              onReset={resetOutline}
             />
           </div>
         </div>
@@ -156,6 +173,7 @@ export default function OutlinePanel() {
             onSaveSection={(md) =>
               setSectionMarkdown(step2.currentSectionIndex, md)
             }
+            onJumpSection={setCurrentSectionIndex}
           />
         )}
         {currentStep === 3 && (
@@ -164,10 +182,26 @@ export default function OutlinePanel() {
             elapsedSec={elapsedSec}
             onContinueBody={continueCurrentBody}
             onSaveBody={(md) => setBodyMarkdown(step3.currentBodyIndex, md)}
+            onJumpBody={setCurrentBodyIndex}
           />
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Reset button ──────────────────────────────────────────────────
+
+function ResetButton({ onReset }: { onReset: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onReset}
+      className="rounded border border-red-200 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50"
+      title="아웃라인 + 파일 모두 초기화"
+    >
+      초기화
+    </button>
   );
 }
 
@@ -239,7 +273,6 @@ interface HeaderActionsProps {
   onProceedToStep3: () => void;
   onRetryCurrentBody: () => void;
   onNextBody: () => void;
-  onReset: () => void;
 }
 
 function HeaderActions(p: HeaderActionsProps) {
@@ -248,15 +281,6 @@ function HeaderActions(p: HeaderActionsProps) {
     const isReady = p.step1.status === 'ready';
     return (
       <div className="flex shrink-0 gap-2">
-        {isReady && (
-          <button
-            type="button"
-            onClick={p.onReset}
-            className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
-          >
-            지우기
-          </button>
-        )}
         {!isReady && (
           <button
             type="button"
@@ -461,37 +485,77 @@ interface StepperProps {
   step1: OutlineStepState;
   step2: Step2State;
   step3: Step3State;
+  onJump: (step: 1 | 2 | 3) => void;
 }
 
-function Stepper({ currentStep, step1, step2, step3 }: StepperProps) {
+function Stepper({ currentStep, step1, step2, step3, onJump }: StepperProps) {
   const step1Done = step1.status === 'ready';
+  const step2HasData = step2.sections.length > 0;
   const step2Done = step2.status === 'all-done';
+  const step3HasData = step3.bodies.length > 0;
   const step3Done = step3.status === 'all-done';
-  const items: { num: 1 | 2 | 3; label: string; done: boolean }[] = [
-    { num: 1, label: '사전 분석', done: step1Done },
-    { num: 2, label: '아웃라인 구조', done: step2Done },
-    { num: 3, label: '본문 작성', done: step3Done },
+  const items: {
+    num: 1 | 2 | 3;
+    label: string;
+    done: boolean;
+    canJump: boolean;
+  }[] = [
+    { num: 1, label: '사전 분석', done: step1Done, canJump: step1Done },
+    {
+      num: 2,
+      label: '아웃라인 구조',
+      done: step2Done,
+      canJump: step2HasData,
+    },
+    { num: 3, label: '본문 작성', done: step3Done, canJump: step3HasData },
   ];
   return (
     <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
       {items.map((it, i) => {
         const isCurrent = it.num === currentStep;
+        const clickable = it.canJump && !isCurrent;
         return (
           <div key={it.num} className="flex items-center gap-2">
-            <span
-              className={`inline-flex size-4 items-center justify-center rounded-full text-[10px] font-medium ${
-                it.done
-                  ? 'bg-green-500 text-white'
-                  : isCurrent
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-gray-500'
+            <button
+              type="button"
+              onClick={() => clickable && onJump(it.num)}
+              disabled={!clickable}
+              className={`flex items-center gap-1.5 rounded px-1 py-0.5 ${
+                clickable
+                  ? 'cursor-pointer hover:bg-gray-100'
+                  : 'cursor-default'
               }`}
+              title={
+                clickable
+                  ? `${it.label}으로 이동`
+                  : isCurrent
+                    ? '현재 단계'
+                    : '아직 진행 안 됨'
+              }
             >
-              {it.done ? '✓' : it.num}
-            </span>
-            <span className={isCurrent ? 'font-medium text-gray-900' : ''}>
-              {it.label}
-            </span>
+              <span
+                className={`inline-flex size-4 items-center justify-center rounded-full text-[10px] font-medium ${
+                  it.done
+                    ? 'bg-green-500 text-white'
+                    : isCurrent
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-200 text-gray-500'
+                }`}
+              >
+                {it.done ? '✓' : it.num}
+              </span>
+              <span
+                className={
+                  isCurrent
+                    ? 'font-medium text-gray-900'
+                    : clickable
+                      ? 'text-gray-700'
+                      : ''
+                }
+              >
+                {it.label}
+              </span>
+            </button>
             {i < items.length - 1 && <span className="text-gray-300">›</span>}
           </div>
         );
@@ -533,6 +597,7 @@ interface Step2ViewProps {
   step1Markdown: string | null;
   elapsedSec: number;
   onSaveSection?: (next: string) => void;
+  onJumpSection?: (index: number) => void;
 }
 
 function Step2View({
@@ -540,6 +605,7 @@ function Step2View({
   step1Markdown,
   elapsedSec,
   onSaveSection,
+  onJumpSection,
 }: Step2ViewProps) {
   if (step2.status === 'fetching-sections') {
     return <ProgressView title="대분류 목록 추출 중" elapsedSec={elapsedSec} />;
@@ -580,6 +646,11 @@ function Step2View({
               key={s.index}
               section={s}
               isCurrent={idx === step2.currentSectionIndex}
+              onClick={
+                s.status !== 'pending' && onJumpSection
+                  ? () => onJumpSection(idx)
+                  : undefined
+              }
             />
           ))}
         </div>
@@ -616,9 +687,11 @@ function Step2View({
 function SectionBadge({
   section,
   isCurrent,
+  onClick,
 }: {
   section: SectionState;
   isCurrent: boolean;
+  onClick?: () => void;
 }) {
   const style =
     section.status === 'ready'
@@ -628,6 +701,22 @@ function SectionBadge({
         : section.status === 'error'
           ? 'bg-red-100 text-red-800 border-red-200'
           : 'bg-gray-100 text-gray-600 border-gray-200';
+  const cursor = onClick ? 'cursor-pointer hover:brightness-95' : '';
+  const label = `${section.index}. ${section.title.length > 15 ? section.title.slice(0, 15) + '…' : section.title}`;
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`rounded border px-2 py-0.5 text-[10px] ${style} ${cursor} ${
+          isCurrent ? 'ring-2 ring-blue-400' : ''
+        }`}
+        title={`대분류 ${section.index}: ${section.title} (클릭하여 이동)`}
+      >
+        {label}
+      </button>
+    );
+  }
   return (
     <span
       className={`rounded border px-2 py-0.5 text-[10px] ${style} ${
@@ -635,7 +724,7 @@ function SectionBadge({
       }`}
       title={`대분류 ${section.index}: ${section.title}`}
     >
-      {section.index}. {section.title.length > 15 ? section.title.slice(0, 15) + '…' : section.title}
+      {label}
     </span>
   );
 }
@@ -672,6 +761,9 @@ function CurrentSectionView({
           )}
           {section.usage?.total_tokens != null && (
             <> · 토큰: {section.usage.total_tokens.toLocaleString()}</>
+          )}
+          {section.markdown && (
+            <> · 출력 {section.markdown.length.toLocaleString()}자</>
           )}
         </div>
         <TruncationWarning finishReason={section.finishReason} />
@@ -754,6 +846,9 @@ function ResultView({
         {state.usage?.total_tokens != null && (
           <> · 토큰: {state.usage.total_tokens.toLocaleString()}</>
         )}
+        {state.markdown != null && (
+          <> · 출력 {state.markdown.length.toLocaleString()}자</>
+        )}
       </div>
       <TruncationWarning finishReason={state.finishReason} />
       {readOnly && (
@@ -779,6 +874,7 @@ interface Step3ViewProps {
   elapsedSec: number;
   onContinueBody?: () => void;
   onSaveBody?: (next: string) => void;
+  onJumpBody?: (index: number) => void;
 }
 
 function Step3View({
@@ -786,6 +882,7 @@ function Step3View({
   elapsedSec,
   onContinueBody,
   onSaveBody,
+  onJumpBody,
 }: Step3ViewProps) {
   if (step3.status === 'error' && step3.error) {
     return <ErrorView code={step3.error.code} message={step3.error.message} />;
@@ -814,6 +911,11 @@ function Step3View({
               key={b.id}
               body={b}
               isCurrent={idx === step3.currentBodyIndex}
+              onClick={
+                b.status !== 'pending' && onJumpBody
+                  ? () => onJumpBody(idx)
+                  : undefined
+              }
             />
           ))}
         </div>
@@ -843,9 +945,11 @@ function Step3View({
 function BodyBadge({
   body,
   isCurrent,
+  onClick,
 }: {
   body: BodyState;
   isCurrent: boolean;
+  onClick?: () => void;
 }) {
   const style =
     body.status === 'ready'
@@ -858,15 +962,28 @@ function BodyBadge({
   const shortTitle = body.ref.midTitle
     .replace(/^\[중분류[^\]]*\]\s*/, '')
     .slice(0, 14);
+  const label = `${body.ref.mainIndex}.${body.ref.midIndex + 1} ${shortTitle}${body.ref.midTitle.length > 14 ? '…' : ''}`;
+  const baseClass = `rounded border px-2 py-0.5 text-[10px] ${style} ${
+    isCurrent ? 'ring-2 ring-blue-400' : ''
+  }`;
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`${baseClass} cursor-pointer hover:brightness-95`}
+        title={`${body.ref.mainTitle} > ${body.ref.midTitle} (클릭하여 이동)`}
+      >
+        {label}
+      </button>
+    );
+  }
   return (
     <span
-      className={`rounded border px-2 py-0.5 text-[10px] ${style} ${
-        isCurrent ? 'ring-2 ring-blue-400' : ''
-      }`}
+      className={baseClass}
       title={`${body.ref.mainTitle} > ${body.ref.midTitle}`}
     >
-      {body.ref.mainIndex}.{body.ref.midIndex + 1} {shortTitle}
-      {body.ref.midTitle.length > 14 ? '…' : ''}
+      {label}
     </span>
   );
 }
