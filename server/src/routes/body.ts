@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { ApiError } from '../middleware/error-handler.js';
+import { config } from '../config.js';
 import { getLlmClient } from '../llm/client.js';
 import { loadAndRenderPrompt } from '../llm/prompts.js';
 
@@ -20,6 +21,7 @@ interface BodySectionBody {
   midTitle: string;
   midGuidance: string;
   step2SectionMarkdown: string;
+  previousMarkdown?: string; // 이어쓰기 모드 — 있으면 이전 응답에 이어서 작성
 }
 
 const isInputFile = (v: unknown): v is InputFile =>
@@ -29,18 +31,22 @@ const isInputFile = (v: unknown): v is InputFile =>
   typeof (v as InputFile).name === 'string' &&
   typeof (v as InputFile).textContent === 'string';
 
-const isBody = (v: unknown): v is BodySectionBody =>
-  typeof v === 'object' &&
-  v !== null &&
-  Array.isArray((v as BodySectionBody).announcementFiles) &&
-  (v as BodySectionBody).announcementFiles.every(isInputFile) &&
-  Array.isArray((v as BodySectionBody).companyFiles) &&
-  (v as BodySectionBody).companyFiles.every(isInputFile) &&
-  typeof (v as BodySectionBody).step1Markdown === 'string' &&
-  typeof (v as BodySectionBody).mainTitle === 'string' &&
-  typeof (v as BodySectionBody).midTitle === 'string' &&
-  typeof (v as BodySectionBody).midGuidance === 'string' &&
-  typeof (v as BodySectionBody).step2SectionMarkdown === 'string';
+const isBody = (v: unknown): v is BodySectionBody => {
+  if (typeof v !== 'object' || v === null) return false;
+  const b = v as BodySectionBody;
+  return (
+    Array.isArray(b.announcementFiles) &&
+    b.announcementFiles.every(isInputFile) &&
+    Array.isArray(b.companyFiles) &&
+    b.companyFiles.every(isInputFile) &&
+    typeof b.step1Markdown === 'string' &&
+    typeof b.mainTitle === 'string' &&
+    typeof b.midTitle === 'string' &&
+    typeof b.midGuidance === 'string' &&
+    typeof b.step2SectionMarkdown === 'string' &&
+    (b.previousMarkdown === undefined || typeof b.previousMarkdown === 'string')
+  );
+};
 
 const COMPANY_EMPTY_FALLBACK = `(회사 정보 파일이 제공되지 않았습니다. 자사 핵심 정보가 필요한 항목은 일반적 표현으로 대체하거나 "추후 자사 정보 확보 후 보강 필요"로 표기해주십시오.)`;
 
@@ -71,7 +77,9 @@ bodyRouter.post('/body/section', async (req, res, next) => {
     midTitle,
     midGuidance,
     step2SectionMarkdown,
+    previousMarkdown,
   } = req.body;
+  const isContinuation = !!previousMarkdown && previousMarkdown.length > 0;
   if (announcementFiles.length === 0) {
     return next(
       new ApiError(
@@ -110,8 +118,17 @@ bodyRouter.post('/body/section', async (req, res, next) => {
     });
     const { client, model } = getLlmClient();
 
+    const userContent = isContinuation
+      ? `이번 회차의 대상 중분류는 "${midTitle}"입니다. **이전 응답이 max_tokens 한도로 도중에 끊겼으므로**, 아래 [이전 응답]의 마지막 지점에서 **자연스럽게 이어서** 작성하십시오. 같은 내용 반복·재시작·재요약 절대 금지. 끊긴 단락부터 매끄럽게 이어 쓰되, **이어지는 부분만 1,500~2,000자 이내**로 간결히 마무리하십시오.
+
+[이전 응답 (잘린 상태)]
+${previousMarkdown}`
+      : `이번 회차의 대상 중분류는 "${midTitle}"입니다. 다른 중분류는 절대 작성하지 마십시오. [Output Format]에 따라 본 중분류의 본문을 작성하되, **응답 전체는 반드시 2,500~3,500자 이내로** 작성하십시오. 분량이 길어지면 timeout으로 작업이 중단됩니다.`;
+
     console.log(
-      `[body section] "${midTitle}" prompt=${systemPrompt.length}자 model=${model}`,
+      `[body section${isContinuation ? ' (continue)' : ''}] "${midTitle}" prompt=${systemPrompt.length}자 model=${model}${
+        isContinuation ? `, prev=${previousMarkdown.length}자` : ''
+      }`,
     );
 
     const startedAt = Date.now();
@@ -119,12 +136,11 @@ bodyRouter.post('/body/section', async (req, res, next) => {
       model,
       messages: [
         { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `이번 회차의 대상 중분류는 "${midTitle}"입니다. 다른 중분류는 절대 작성하지 마십시오. [Output Format]에 따라 본 중분류의 본문을 작성하되, **응답 전체는 반드시 2,500~3,500자 이내로** 작성하십시오. 분량이 길어지면 timeout으로 작업이 중단됩니다.`,
-        },
+        { role: 'user', content: userContent },
       ],
-      max_tokens: 5000,
+      max_tokens: isContinuation
+        ? config.bodyContinueMaxTokens
+        : config.bodyMaxTokens,
     });
 
     const choice = completion.choices[0];
@@ -139,7 +155,7 @@ bodyRouter.post('/body/section', async (req, res, next) => {
     }
 
     console.log(
-      `[body section] "${midTitle}" done in ${Date.now() - startedAt}ms, output=${markdown.length}자, finish=${choice?.finish_reason}, completionTokens=${completion.usage?.completion_tokens ?? '-'}`,
+      `[body section${isContinuation ? ' (continue)' : ''}] "${midTitle}" done in ${Date.now() - startedAt}ms, output=${markdown.length}자, finish=${choice?.finish_reason}, completionTokens=${completion.usage?.completion_tokens ?? '-'}`,
     );
 
     res.json({

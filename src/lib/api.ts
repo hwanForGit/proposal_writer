@@ -183,6 +183,7 @@ export async function generateBodySection(input: {
   midTitle: string;
   midGuidance: string;
   step2SectionMarkdown: string;
+  previousMarkdown?: string;
 }): Promise<BodySectionResponse> {
   return api.post<BodySectionResponse>('/api/body/section', input);
 }

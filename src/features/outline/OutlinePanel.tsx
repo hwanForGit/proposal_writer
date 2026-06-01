@@ -32,6 +32,8 @@ export default function OutlinePanel() {
   const nextSection = useWorkspaceStore((s) => s.nextSection);
   const proceedToStep3 = useWorkspaceStore((s) => s.proceedToStep3);
   const retryCurrentBody = useWorkspaceStore((s) => s.retryCurrentBody);
+  const continueCurrentBody = useWorkspaceStore((s) => s.continueCurrentBody);
+  const setBodyMarkdown = useWorkspaceStore((s) => s.setBodyMarkdown);
   const nextBody = useWorkspaceStore((s) => s.nextBody);
   const resetOutline = useWorkspaceStore((s) => s.resetOutline);
 
@@ -157,7 +159,12 @@ export default function OutlinePanel() {
           />
         )}
         {currentStep === 3 && (
-          <Step3View step3={step3} elapsedSec={elapsedSec} />
+          <Step3View
+            step3={step3}
+            elapsedSec={elapsedSec}
+            onContinueBody={continueCurrentBody}
+            onSaveBody={(md) => setBodyMarkdown(step3.currentBodyIndex, md)}
+          />
         )}
       </div>
     </div>
@@ -770,9 +777,16 @@ function ResultView({
 interface Step3ViewProps {
   step3: Step3State;
   elapsedSec: number;
+  onContinueBody?: () => void;
+  onSaveBody?: (next: string) => void;
 }
 
-function Step3View({ step3, elapsedSec }: Step3ViewProps) {
+function Step3View({
+  step3,
+  elapsedSec,
+  onContinueBody,
+  onSaveBody,
+}: Step3ViewProps) {
   if (step3.status === 'error' && step3.error) {
     return <ErrorView code={step3.error.code} message={step3.error.message} />;
   }
@@ -816,7 +830,12 @@ function Step3View({ step3, elapsedSec }: Step3ViewProps) {
       </div>
 
       {/* 본문 표시 */}
-      <CurrentBodyView body={current} elapsedSec={elapsedSec} />
+      <CurrentBodyView
+        body={current}
+        elapsedSec={elapsedSec}
+        onContinue={onContinueBody}
+        onSave={onSaveBody}
+      />
     </div>
   );
 }
@@ -855,9 +874,13 @@ function BodyBadge({
 function CurrentBodyView({
   body,
   elapsedSec,
+  onContinue,
+  onSave,
 }: {
   body: BodyState;
   elapsedSec: number;
+  onContinue?: () => void;
+  onSave?: (next: string) => void;
 }) {
   if (body.status === 'pending') {
     return (
@@ -866,6 +889,7 @@ function CurrentBodyView({
       </div>
     );
   }
+  // generating + 기존 markdown 없음 → 초기 생성 진행 표시
   if (body.status === 'generating' && !body.markdown) {
     return (
       <ProgressView
@@ -879,34 +903,82 @@ function CurrentBodyView({
   }
   if (body.markdown) {
     const truncated = body.finishReason === 'length';
+    const isContinuing = body.status === 'generating'; // markdown 있는데 generating == 이어쓰기 중
     return (
       <div className="space-y-3">
         <div className="rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
           모델: <span className="font-mono">{body.modelId}</span>
           {body.elapsedMs != null && (
-            <> · 소요: {(body.elapsedMs / 1000).toFixed(1)}s</>
+            <> · 누적 소요: {(body.elapsedMs / 1000).toFixed(1)}s</>
           )}
           {body.usage?.total_tokens != null && (
-            <> · 토큰: {body.usage.total_tokens.toLocaleString()}</>
+            <> · 토큰(마지막): {body.usage.total_tokens.toLocaleString()}</>
           )}
           <> · 출력 {body.markdown.length.toLocaleString()}자</>
         </div>
-        {truncated && <BodyTruncationNotice />}
-        <MarkdownView markdown={body.markdown} />
+        {isContinuing && (
+          <div className="flex items-center gap-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            <span className="inline-block size-2 animate-pulse rounded-full bg-blue-500" />
+            이어쓰기 생성 중…{' '}
+            <span className="font-mono tabular-nums">
+              {formatElapsed(elapsedSec)}
+            </span>
+          </div>
+        )}
+        {truncated && !isContinuing && (
+          <BodyTruncationNotice
+            markdown={body.markdown}
+            onContinue={onContinue}
+          />
+        )}
+        <MarkdownView
+          markdown={body.markdown}
+          editable={!!onSave && !isContinuing}
+          onSave={onSave}
+        />
       </div>
     );
   }
   return null;
 }
 
-function BodyTruncationNotice() {
+function BodyTruncationNotice({
+  markdown,
+  onContinue,
+}: {
+  markdown: string;
+  onContinue?: () => void;
+}) {
+  const tail = markdown
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-120);
   return (
-    <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-      ⚠️ <span className="font-semibold">본문이 도중에 끊겼습니다</span>{' '}
-      (max_tokens 한도 도달). 마지막 단락이 미완성일 수 있습니다.
-      <span className="ml-1 text-amber-700">
-        이어서 작성 기능은 Phase B에서 추가됩니다 — 지금은 표시만.
-      </span>
+    <div className="space-y-2 rounded border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+      <div>
+        ⚠️ <span className="font-semibold">본문이 도중에 끊겼습니다</span>{' '}
+        (max_tokens 한도). 마지막 단락이 미완성일 가능성이 큽니다.
+      </div>
+      <div className="rounded border border-amber-200 bg-white/60 px-2 py-1.5 font-mono text-[11px] text-amber-800">
+        <span className="text-amber-600">…</span>
+        {tail}
+        <span className="ml-0.5 text-amber-600">▮</span>
+      </div>
+      {onContinue && (
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onContinue}
+            className="rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
+          >
+            이어서 작성
+          </button>
+          <span className="self-center text-[11px] text-amber-700">
+            안 누르면 그대로 둡니다 — 직접 편집하거나 [다음 중분류]로 넘어가도
+            돼요.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

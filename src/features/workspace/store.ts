@@ -159,6 +159,8 @@ interface WorkspaceState {
   proceedToStep3: () => Promise<void>;
   generateCurrentBody: () => Promise<void>;
   retryCurrentBody: () => Promise<void>;
+  continueCurrentBody: () => Promise<void>;
+  setBodyMarkdown: (index: number, markdown: string) => void;
   nextBody: () => Promise<void>;
   resetOutline: () => void;
 }
@@ -686,6 +688,118 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     await get().generateCurrentBody();
   },
 
+  continueCurrentBody: async () => {
+    const { files, outline } = get();
+    const { step3, step2, step1 } = outline;
+    const i = step3.currentBodyIndex;
+    const body = step3.bodies[i];
+    if (!body || !body.markdown || !step1.markdown) return;
+
+    const step2Section = step2.sections.find(
+      (s) => s.index === body.ref.mainIndex,
+    );
+    const step2SectionMarkdown = step2Section?.markdown ?? '';
+
+    // 기존 markdown 유지하면서 status만 generating으로
+    set((state) => ({
+      outline: {
+        ...state.outline,
+        step3: {
+          ...state.outline.step3,
+          bodies: state.outline.step3.bodies.map((b, idx) =>
+            idx === i ? { ...b, status: 'generating', error: null } : b,
+          ),
+        },
+      },
+    }));
+
+    const inputs = buildLlmInputs(files);
+    const callArgs = {
+      ...inputs,
+      step1Markdown: step1.markdown,
+      mainTitle: body.ref.mainTitle,
+      midTitle: body.ref.midTitle,
+      midGuidance: body.ref.midGuidance,
+      step2SectionMarkdown,
+      previousMarkdown: body.markdown,
+    };
+
+    const isTransient = (err: unknown): boolean => {
+      if (!(err instanceof ApiError)) return false;
+      const status = err.status;
+      return (
+        err.code === 'LLM_REQUEST_FAILED' &&
+        (status === 502 || status === 503 || status === 504 || status === 0)
+      );
+    };
+
+    let res: Awaited<ReturnType<typeof generateBodySection>> | null = null;
+    let lastErr: unknown = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (attempt > 1) await new Promise((r) => setTimeout(r, 5000));
+        res = await generateBodySection(callArgs);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransient(err) || attempt === 2) break;
+      }
+    }
+
+    if (res) {
+      set((state) => ({
+        outline: {
+          ...state.outline,
+          step3: {
+            ...state.outline.step3,
+            bodies: state.outline.step3.bodies.map((b, idx) => {
+              if (idx !== i) return b;
+              const merged =
+                (b.markdown ?? '').trimEnd() + '\n\n' + res.markdown.trimStart();
+              return {
+                ...b,
+                status: 'ready',
+                markdown: merged,
+                finishReason: res.finishReason,
+                modelId: res.modelId,
+                generatedAt: res.generatedAt,
+                elapsedMs: (b.elapsedMs ?? 0) + res.elapsedMs,
+                usage: res.usage,
+                error: null,
+              };
+            }),
+          },
+        },
+      }));
+    } else {
+      set((state) => ({
+        outline: {
+          ...state.outline,
+          step3: {
+            ...state.outline.step3,
+            bodies: state.outline.step3.bodies.map((b, idx) =>
+              idx === i ? { ...b, status: 'error', error: errInfo(lastErr) } : b,
+            ),
+          },
+        },
+      }));
+    }
+  },
+
+  setBodyMarkdown: (index, markdown) =>
+    set((state) => ({
+      outline: {
+        ...state.outline,
+        step3: {
+          ...state.outline.step3,
+          bodies: state.outline.step3.bodies.map((b, i) =>
+            i === index ? { ...b, markdown } : b,
+          ),
+        },
+      },
+    })),
+
   nextBody: async () => {
     const { outline } = get();
     const last = outline.step3.bodies.length - 1;
@@ -720,7 +834,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       partialize: (state) => ({ outline: state.outline }),
       // 스토어 모양이 진화할 때 옛 데이터에 누락된 필드를 기본값으로 채워 throw 방지.
       version: 2,
-      migrate: (persistedState, _fromVersion) => {
+      migrate: (persistedState) => {
         const s = persistedState as { outline?: Partial<OutlineState> } | null;
         if (!s || !s.outline) return { outline: initialOutline };
         const outline: OutlineState = {
