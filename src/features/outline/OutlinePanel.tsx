@@ -690,23 +690,40 @@ function Step2View({
         onSave={onSaveSection}
       />
 
-      {/* 완료된 이전 대분류들 (접힘) */}
-      {step2.sections
-        .slice(0, step2.currentSectionIndex)
-        .filter((s) => s.status === 'ready')
-        .map((s) => (
-          <details
-            key={s.index}
-            className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs"
-          >
-            <summary className="cursor-pointer font-medium text-gray-800">
-              ✓ [대분류 {s.index}] {s.title}
-            </summary>
-            <div className="mt-2">
-              <MarkdownView markdown={s.markdown ?? ''} />
-            </div>
-          </details>
-        ))}
+      {/* 전체 아웃라인 미리보기 — 생성된 모든 대분류 한 번에 (확인용, 편집은 위쪽 카드에서) */}
+      {step2.sections.filter((s) => s.status === 'ready' && s.markdown).length >
+        0 && (
+        <details open className="rounded-lg border border-blue-200 bg-white">
+          <summary className="cursor-pointer rounded-t-lg bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-900">
+            📋 전체 아웃라인 미리보기{' '}
+            <span className="text-xs font-normal text-blue-700">
+              ({step2.sections.filter((s) => s.status === 'ready' && s.markdown).length}
+              /{step2.sections.length} 대분류) — 클릭하여 접기/펼치기
+            </span>
+          </summary>
+          <div className="space-y-4 p-3">
+            {step2.sections
+              .filter((s) => s.status === 'ready' && s.markdown)
+              .map((s) => (
+                <div
+                  key={s.index}
+                  className="rounded-lg border border-gray-200 bg-white"
+                >
+                  <div className="rounded-t-lg border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700">
+                    ✓ [대분류 {s.index}] {s.title}
+                  </div>
+                  <div className="p-3">
+                    <MarkdownView markdown={s.markdown ?? ''} />
+                  </div>
+                </div>
+              ))}
+          </div>
+          <div className="border-t border-blue-100 bg-blue-50/40 px-3 py-1.5 text-[11px] text-blue-800">
+            💡 위 미리보기는 읽기 전용입니다. 편집은 현재 작업 중인 대분류
+            카드에서 진행하세요.
+          </div>
+        </details>
+      )}
     </div>
   );
 }
