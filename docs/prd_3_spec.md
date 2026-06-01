@@ -249,11 +249,11 @@ server/
 
 ## 9. 마일스톤 (M23~)
 
-- [ ] **M23** — 통합 마크다운 빌더(`server/src/exporters/markdown.ts`) + 표지 메타 store 슬롯 + ExportDialog UI 골격
-- [ ] **M24** — DOCX 변환 (pandoc vs `docx` 결정 후 구현) + `/api/export/docx`
-- [ ] **M25** — PDF 변환 (puppeteer + markdown-it + `.markdown-body` 스타일 임베드) + `/api/export/pdf`
-- [ ] **M26** — 서식 매핑 검증 샘플 다운로드 (§5.5의 모든 요소 포함) + Word/PDF 뷰어 검증 + 발견된 깨짐 보정
-- [ ] **M27** — 진행 표시 UI · 에러 처리 정리 · "한컴 한글에서 HWPX로 저장하기" 안내 추가 · README/spec 갱신
+- [x] **M23** — 통합 마크다운 빌더 + 표지 메타 store 슬롯 + ExportDialog UI 골격
+- [x] **M24** — DOCX 변환 (pandoc 채택) + `/api/export/docx`
+- [x] **M25** — PDF 변환 (puppeteer + markdown-it + `.markdown-body` 스타일 임베드) + `/api/export/pdf`
+- [x] **M26** — 서식 매핑 검증 샘플(§5.5 13요소) + Dialog 안 "🔧 서식 매핑 검증" 패널
+- [x] **M27** — 다운로드 성공 안내(녹색 박스) · "한컴에서 HWPX로 저장" 안내 메시지 · README/spec 갱신
 
 ---
 

@@ -14,6 +14,8 @@
 
 - **Node.js 20+** / npm
 - **사내 망 접근권**: 회사 이메일 + VPN (사내 LLM Gateway 호출에 필요)
+- **pandoc** (DOCX 다운로드용): `brew install pandoc` (macOS) 또는 `apt install pandoc` (Linux)
+- **puppeteer**는 `npm install` 시 Chromium 자동 다운로드 (PDF 다운로드용)
 - 가이드 문서: [LLM EndPoint 설정 가이드](https://inflab.atlassian.net/wiki/spaces/DO/pages/2739896334/LLM+EndPoint)
 
 ## 설치
@@ -70,8 +72,13 @@ VPN이 켜져 있어야 LLM 호출이 됩니다. 브라우저에서 http://local
 2. **Step 1 시작** → 벤치마킹 분석 보고서 + 사업 수주 핵심 전략 자동 생성
 3. **다음 → Step 2** → 양식의 대분류 N개를 순회하며 각 영역의 중분류·소분류를 생성
 4. **편집** — 트리 카드에서 인라인 제목 편집, 소분류 추가/삭제, 중분류 추가
-5. **내보내기** — Markdown(.md) 또는 JSON(.json) 다운로드
-6. 페이지 새로고침해도 작업 결과는 `localStorage`에 자동 보존됨
+5. **내보내기** — 헤더 [내보내기 ▾]
+   - **📝 사업계획서 다운로드…** — 표지 정보 입력 모달 → **DOCX / PDF / Markdown** 선택
+     - DOCX: pandoc으로 변환. 국비 사업 제출용 HWPX가 필요하면 한컴 한글에서 열어 **다른 이름으로 저장 → 한글 문서(*.hwpx)**.
+     - PDF: puppeteer로 변환. 미리보기·공유용. 화면 `.markdown-body` 스타일 그대로 보존.
+     - 모달 안 **🔧 서식 매핑 검증** 패널: 13개 마크다운 요소를 모두 포함한 샘플 DOCX/PDF 다운로드해 화면 렌더와 비교 가능.
+   - **Markdown (.md) / JSON (.json)** — 표지 없이 빠른 raw export
+6. 페이지 새로고침해도 작업 결과는 `localStorage`에 자동 보존됨 (outline + 업로드 파일 텍스트 + 표지 정보)
 
 ## 스크립트
 
@@ -146,5 +153,5 @@ proposal_writer/
 - [x] M8: 트리 구조 편집기 (중분류·소분류 add/remove/edit, 가이드 read-only)
 - [x] M10: localStorage 자동 저장 + Markdown/JSON 내보내기
 - [x] M11: 에러/빈 상태 UI 정리 + README
-- [ ] Step 3 / Phase 2: 본문 자동 작성
-- [ ] Phase 3: DOCX/HWPX/PDF 최종 내보내기
+- [x] Phase 2 (Step 3 본문 자동 작성, 이어쓰기, 편집)
+- [x] Phase 3: DOCX/PDF 최종 내보내기 (HWPX는 한컴 한글에서 사용자가 직접 저장)

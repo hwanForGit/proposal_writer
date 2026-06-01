@@ -37,6 +37,10 @@ export default function ExportDialog({ open, onClose }: Props) {
   const [error, setError] = useState<{ code: string; message: string } | null>(
     null,
   );
+  const [success, setSuccess] = useState<null | {
+    format: 'markdown' | 'docx' | 'pdf';
+    filename: string;
+  }>(null);
 
   if (!open) return null;
 
@@ -48,12 +52,14 @@ export default function ExportDialog({ open, onClose }: Props) {
 
   const onMarkdown = () => {
     setError(null);
+    setSuccess(null);
     setWorking('markdown');
     try {
       const md = buildCombinedMarkdown(outline, coverMeta);
+      const filename = `${baseFilename()}.md`;
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-      downloadBlob(blob, `${baseFilename()}.md`);
-      onClose();
+      downloadBlob(blob, filename);
+      setSuccess({ format: 'markdown', filename });
     } finally {
       setWorking(null);
     }
@@ -61,13 +67,14 @@ export default function ExportDialog({ open, onClose }: Props) {
 
   const onDocx = async () => {
     setError(null);
+    setSuccess(null);
     setWorking('docx');
     try {
       const md = buildCombinedMarkdown(outline, coverMeta);
       const filename = `${baseFilename()}.docx`;
       const blob = await exportMarkdownAsDocx(md, filename);
       downloadBlob(blob, filename);
-      onClose();
+      setSuccess({ format: 'docx', filename });
     } catch (err) {
       setError({
         code: err instanceof ApiError ? err.code : 'UNEXPECTED',
@@ -80,13 +87,14 @@ export default function ExportDialog({ open, onClose }: Props) {
 
   const onPdf = async () => {
     setError(null);
+    setSuccess(null);
     setWorking('pdf');
     try {
       const md = buildCombinedMarkdown(outline, coverMeta);
       const filename = `${baseFilename()}.pdf`;
       const blob = await exportMarkdownAsPdf(md, filename);
       downloadBlob(blob, filename);
-      onClose();
+      setSuccess({ format: 'pdf', filename });
     } catch (err) {
       setError({
         code: err instanceof ApiError ? err.code : 'UNEXPECTED',
@@ -228,13 +236,40 @@ export default function ExportDialog({ open, onClose }: Props) {
           </div>
         )}
 
+        {success && (
+          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">
+            <div className="font-medium">
+              ✓ 다운로드 완료 —{' '}
+              <span className="font-mono">{success.filename}</span>
+            </div>
+            {success.format === 'docx' && (
+              <div className="mt-1 leading-relaxed text-green-800">
+                국비 사업 제출용 <strong>HWPX</strong>가 필요하면 한컴 한글에서
+                이 DOCX를 열어 <strong>다른 이름으로 저장 → 한글 문서
+                (*.hwpx)</strong>로 저장하세요. 표·서식이 미세하게 어긋날 수
+                있어 한 번 훑어보는 걸 권장합니다.
+              </div>
+            )}
+            {success.format === 'pdf' && (
+              <div className="mt-1 leading-relaxed text-green-800">
+                미리보기·공유용으로 사용하세요. 재편집이 필요하면 DOCX 다운로드
+                후 한컴/Word에서 여는 것을 권장합니다.
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-200 pt-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              setSuccess(null);
+              setError(null);
+              onClose();
+            }}
             className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
           >
-            닫기
+            {success ? '확인 (닫기)' : '닫기'}
           </button>
           <button
             type="button"
