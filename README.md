@@ -144,8 +144,10 @@ proposal_writer/
 
 ## 사양 문서
 
+- **[HANDOFF.md](docs/HANDOFF.md)** — Claude 새 세션·새 머신 시작 시 가장 먼저 읽을 핸드오프 노트
 - [Phase 1 사양](docs/prd_1_spec.md) — 파일 업로드 ~ 아웃라인 편집까지
-- [Phase 2 사양](docs/prd_2_spec.md) — 본문 자동 작성 (예정)
+- [Phase 2 사양](docs/prd_2_spec.md) — 본문 자동 작성
+- [Phase 3 사양](docs/prd_3_spec.md) — DOCX/PDF 다운로드
 
 ## 로드맵
 
