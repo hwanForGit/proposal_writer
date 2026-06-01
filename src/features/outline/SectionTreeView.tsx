@@ -308,24 +308,27 @@ interface GuidanceProps {
 function GuidanceBox({ label, children, compact, className }: GuidanceProps) {
   return (
     <div
-      className={`rounded border border-gray-200 bg-gray-50/80 ${
-        compact ? 'px-2 py-1' : 'px-3 py-2'
+      className={`flex gap-2 rounded-md border-l-[3px] border-amber-300 bg-amber-50/60 ${
+        compact ? 'px-2.5 py-1.5' : 'px-3 py-2'
       } ${className ?? ''}`}
     >
-      <div className="flex gap-1.5">
-        <span className="shrink-0 text-amber-600">📌</span>
-        <div className="min-w-0 flex-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-            {label}
-          </span>
-          <p
-            className={`mt-0.5 leading-relaxed text-gray-700 ${
-              compact ? 'text-xs' : 'text-sm'
-            }`}
-          >
-            {children}
-          </p>
-        </div>
+      <span
+        className={`shrink-0 select-none ${compact ? 'text-[11px]' : 'text-xs'}`}
+        aria-hidden
+      >
+        💡
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+          작성 가이드 · {label}
+        </span>
+        <p
+          className={`mt-0.5 italic leading-relaxed text-gray-700 ${
+            compact ? 'text-[12px]' : 'text-[13px]'
+          }`}
+        >
+          {children}
+        </p>
       </div>
     </div>
   );

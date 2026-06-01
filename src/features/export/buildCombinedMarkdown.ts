@@ -1,11 +1,19 @@
 import type { OutlineState } from '@/features/workspace/store';
 import type { CoverMeta } from './types';
 
+export interface BuildOptions {
+  /** Step 3 본문 포함 여부 (false면 아웃라인만 = 트리 구조까지) */
+  includeBody: boolean;
+}
+
+const DEFAULT_OPTIONS: BuildOptions = { includeBody: true };
+
 const trim = (s: string | null | undefined): string => (s ?? '').trim();
 
 export function buildCombinedMarkdown(
   outline: OutlineState,
   cover: CoverMeta,
+  options: BuildOptions = DEFAULT_OPTIONS,
 ): string {
   const parts: string[] = [];
 
@@ -53,29 +61,32 @@ export function buildCombinedMarkdown(
       parts.push(trim(section.markdown));
       parts.push('');
 
-      // 같은 대분류에 속하는 Step 3 본문들
-      const bodies = outline.step3.bodies.filter(
-        (b) => b.ref.mainIndex === section.index && trim(b.markdown),
-      );
-      for (const body of bodies) {
-        parts.push(
-          `#### ${body.ref.mainIndex}.${body.ref.midIndex + 1} ${body.ref.midTitle}`,
+      // 같은 대분류에 속하는 Step 3 본문들 (옵션에 따라)
+      if (options.includeBody) {
+        const bodies = outline.step3.bodies.filter(
+          (b) => b.ref.mainIndex === section.index && trim(b.markdown),
         );
-        parts.push('');
-        parts.push(trim(body.markdown));
-        parts.push('');
+        for (const body of bodies) {
+          parts.push(
+            `#### ${body.ref.mainIndex}.${body.ref.midIndex + 1} ${body.ref.midTitle}`,
+          );
+          parts.push('');
+          parts.push(trim(body.markdown));
+          parts.push('');
+        }
       }
     }
   }
 
-  // 부록 — Step 3 본문들의 "[부록]" 섹션 자동 취합 (있을 때만)
+  // 부록 — Step 3 본문들의 "[부록]" 섹션 자동 취합 (본문 포함 시에만)
   const appendixes: string[] = [];
-  for (const body of outline.step3.bodies) {
-    const md = trim(body.markdown);
-    if (!md) continue;
-    // "[부록]" 또는 "## 부록" 또는 "🔎" 등이 시작되는 마지막 블록 추출
-    const m = md.match(/(\*\*🔎[\s\S]*$|^---\s*\n\*\*🔎[\s\S]*$)/m);
-    if (m) appendixes.push(`### ${body.ref.midTitle}\n\n${m[0]}`);
+  if (options.includeBody) {
+    for (const body of outline.step3.bodies) {
+      const md = trim(body.markdown);
+      if (!md) continue;
+      const m = md.match(/(\*\*🔎[\s\S]*$|^---\s*\n\*\*🔎[\s\S]*$)/m);
+      if (m) appendixes.push(`### ${body.ref.midTitle}\n\n${m[0]}`);
+    }
   }
   if (appendixes.length > 0) {
     parts.push('---');

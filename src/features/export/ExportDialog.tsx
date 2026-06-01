@@ -41,21 +41,28 @@ export default function ExportDialog({ open, onClose }: Props) {
     format: 'markdown' | 'docx' | 'pdf';
     filename: string;
   }>(null);
+  const [includeBody, setIncludeBody] = useState(true);
 
   if (!open) return null;
 
   const update = <K extends keyof CoverMeta>(k: K, v: CoverMeta[K]) =>
     setCoverMeta({ [k]: v } as Partial<CoverMeta>);
 
-  const baseFilename = () =>
-    `${coverMeta.projectName.trim() || 'proposal'}-${stamp()}`;
+  const baseFilename = () => {
+    const slug = coverMeta.projectName.trim() || 'proposal';
+    const suffix = includeBody ? '' : '-outline-only';
+    return `${slug}${suffix}-${stamp()}`;
+  };
+
+  const buildMd = () =>
+    buildCombinedMarkdown(outline, coverMeta, { includeBody });
 
   const onMarkdown = () => {
     setError(null);
     setSuccess(null);
     setWorking('markdown');
     try {
-      const md = buildCombinedMarkdown(outline, coverMeta);
+      const md = buildMd();
       const filename = `${baseFilename()}.md`;
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
       downloadBlob(blob, filename);
@@ -70,7 +77,7 @@ export default function ExportDialog({ open, onClose }: Props) {
     setSuccess(null);
     setWorking('docx');
     try {
-      const md = buildCombinedMarkdown(outline, coverMeta);
+      const md = buildMd();
       const filename = `${baseFilename()}.docx`;
       const blob = await exportMarkdownAsDocx(md, filename);
       downloadBlob(blob, filename);
@@ -90,7 +97,7 @@ export default function ExportDialog({ open, onClose }: Props) {
     setSuccess(null);
     setWorking('pdf');
     try {
-      const md = buildCombinedMarkdown(outline, coverMeta);
+      const md = buildMd();
       const filename = `${baseFilename()}.pdf`;
       const blob = await exportMarkdownAsPdf(md, filename);
       downloadBlob(blob, filename);
@@ -188,6 +195,38 @@ export default function ExportDialog({ open, onClose }: Props) {
               className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
             />
           </Field>
+        </div>
+
+        <div className="space-y-2 rounded border border-gray-200 bg-gray-50/60 px-3 py-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            포함 범위
+          </div>
+          <label className="flex items-start gap-2 text-xs text-gray-800">
+            <input
+              type="radio"
+              name="export-scope"
+              checked={includeBody}
+              onChange={() => setIncludeBody(true)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">전체</span> — 표지 + (선택)Step 1 +
+              아웃라인 트리 + <strong>본문</strong> + 부록
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs text-gray-800">
+            <input
+              type="radio"
+              name="export-scope"
+              checked={!includeBody}
+              onChange={() => setIncludeBody(false)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">아웃라인만</span> — 표지 + (선택)Step
+              1 + 아웃라인 트리만 (Step 3 본문 제외, 트리 구조 확인용)
+            </span>
+          </label>
         </div>
 
         <label className="flex items-center gap-2 text-xs text-gray-700">
