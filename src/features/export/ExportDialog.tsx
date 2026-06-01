@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ApiError, exportMarkdownAsDocx, exportMarkdownAsPdf } from '@/lib/api';
 import { useWorkspaceStore } from '@/features/workspace/store';
 import { buildCombinedMarkdown } from './buildCombinedMarkdown';
+import { VALIDATION_SAMPLE_MARKDOWN } from './validationSample';
 import type { CoverMeta } from './types';
 
 interface Props {
@@ -96,6 +97,26 @@ export default function ExportDialog({ open, onClose }: Props) {
     }
   };
 
+  const onValidation = async (fmt: 'docx' | 'pdf') => {
+    setError(null);
+    setWorking(fmt);
+    try {
+      const filename = `validation-sample-${stamp()}.${fmt}`;
+      const blob =
+        fmt === 'docx'
+          ? await exportMarkdownAsDocx(VALIDATION_SAMPLE_MARKDOWN, filename)
+          : await exportMarkdownAsPdf(VALIDATION_SAMPLE_MARKDOWN, filename);
+      downloadBlob(blob, filename);
+    } catch (err) {
+      setError({
+        code: err instanceof ApiError ? err.code : 'UNEXPECTED',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setWorking(null);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
@@ -170,6 +191,35 @@ export default function ExportDialog({ open, onClose }: Props) {
           Step 1 (사전 분석) 결과도 포함하기
           <span className="text-gray-400">— 기본 OFF, 내부 참고용</span>
         </label>
+
+        <details className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+          <summary className="cursor-pointer font-medium text-gray-700">
+            🔧 서식 매핑 검증 (개발자 도구)
+          </summary>
+          <p className="mt-2 leading-relaxed">
+            §5.5 매핑 표의 13개 마크다운 요소(헤딩·강조·표·코드·이모지 등)를
+            모두 포함한 샘플 문서를 DOCX/PDF로 받아 화면과 비교합니다. 깨지는
+            요소가 있으면 후속 보정 대상.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => onValidation('docx')}
+              disabled={working !== null}
+              className="rounded border border-gray-300 px-2.5 py-1 text-[11px] text-gray-700 hover:bg-white disabled:opacity-50"
+            >
+              샘플 DOCX
+            </button>
+            <button
+              type="button"
+              onClick={() => onValidation('pdf')}
+              disabled={working !== null}
+              className="rounded border border-gray-300 px-2.5 py-1 text-[11px] text-gray-700 hover:bg-white disabled:opacity-50"
+            >
+              샘플 PDF
+            </button>
+          </div>
+        </details>
 
         {error && (
           <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
