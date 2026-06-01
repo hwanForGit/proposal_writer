@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ApiError, exportMarkdownAsDocx } from '@/lib/api';
 import { useWorkspaceStore } from '@/features/workspace/store';
 import { buildCombinedMarkdown } from './buildCombinedMarkdown';
 import type { CoverMeta } from './types';
@@ -32,20 +33,45 @@ export default function ExportDialog({ open, onClose }: Props) {
   const [working, setWorking] = useState<null | 'markdown' | 'docx' | 'pdf'>(
     null,
   );
+  const [error, setError] = useState<{ code: string; message: string } | null>(
+    null,
+  );
 
   if (!open) return null;
 
   const update = <K extends keyof CoverMeta>(k: K, v: CoverMeta[K]) =>
     setCoverMeta({ [k]: v } as Partial<CoverMeta>);
 
+  const baseFilename = () =>
+    `${coverMeta.projectName.trim() || 'proposal'}-${stamp()}`;
+
   const onMarkdown = () => {
+    setError(null);
     setWorking('markdown');
     try {
       const md = buildCombinedMarkdown(outline, coverMeta);
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-      const projectName = coverMeta.projectName.trim() || 'proposal';
-      downloadBlob(blob, `${projectName}-${stamp()}.md`);
+      downloadBlob(blob, `${baseFilename()}.md`);
       onClose();
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const onDocx = async () => {
+    setError(null);
+    setWorking('docx');
+    try {
+      const md = buildCombinedMarkdown(outline, coverMeta);
+      const filename = `${baseFilename()}.docx`;
+      const blob = await exportMarkdownAsDocx(md, filename);
+      downloadBlob(blob, filename);
+      onClose();
+    } catch (err) {
+      setError({
+        code: err instanceof ApiError ? err.code : 'UNEXPECTED',
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setWorking(null);
     }
@@ -126,6 +152,13 @@ export default function ExportDialog({ open, onClose }: Props) {
           <span className="text-gray-400">— 기본 OFF, 내부 참고용</span>
         </label>
 
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <div className="font-medium">{error.code}</div>
+            <div className="mt-0.5 whitespace-pre-wrap">{error.message}</div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-200 pt-3">
           <button
             type="button"
@@ -144,11 +177,11 @@ export default function ExportDialog({ open, onClose }: Props) {
           </button>
           <button
             type="button"
-            disabled
-            title="M24에서 활성화"
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white opacity-50"
+            onClick={onDocx}
+            disabled={working !== null}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            DOCX
+            {working === 'docx' ? 'DOCX 생성 중…' : 'DOCX 다운로드'}
           </button>
           <button
             type="button"

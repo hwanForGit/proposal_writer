@@ -175,6 +175,38 @@ export interface BodySectionResponse {
   elapsedMs: number;
 }
 
+export async function exportMarkdownAsDocx(
+  markdown: string,
+  filename: string,
+): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/export/docx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown, filename }),
+    });
+  } catch (cause) {
+    throw new ApiError(0, 'NETWORK_ERROR', '서버에 연결할 수 없습니다', {
+      cause: String(cause),
+    });
+  }
+  if (!res.ok) {
+    const isJson = res.headers
+      .get('content-type')
+      ?.includes('application/json');
+    const body: unknown = isJson ? await res.json().catch(() => null) : null;
+    const err = (body as ApiErrorBody | null)?.error;
+    throw new ApiError(
+      res.status,
+      err?.code ?? 'UNKNOWN_ERROR',
+      err?.message ?? res.statusText,
+      err?.details,
+    );
+  }
+  return res.blob();
+}
+
 export async function generateBodySection(input: {
   announcementFiles: OutlineGenerateInputFile[];
   companyFiles: OutlineGenerateInputFile[];
