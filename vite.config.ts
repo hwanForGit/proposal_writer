@@ -11,6 +11,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: true, // 0.0.0.0 — 사내 망에서 다른 PC가 IP로 접근 가능 (192.168.x.x:5173)
     port: 5173,
     open: true,
     proxy: {
