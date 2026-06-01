@@ -9,6 +9,10 @@ import {
   type OutlineUsage,
 } from '@/lib/api';
 import { parseSection } from '@/features/outline/sectionTree';
+import {
+  initialCoverMeta as buildInitialCoverMeta,
+  type CoverMeta,
+} from '@/features/export/types';
 import type { FileCategory, WorkspaceFile } from './types';
 
 interface UploadingInit {
@@ -141,6 +145,7 @@ const initialOutline: OutlineState = {
 interface WorkspaceState {
   files: WorkspaceFile[];
   outline: OutlineState;
+  coverMeta: CoverMeta;
 
   addUploadingFiles: (items: UploadingInit[]) => void;
   markParsed: (id: string, payload: ParsedPayload) => void;
@@ -165,6 +170,7 @@ interface WorkspaceState {
   setCurrentStep: (step: 1 | 2 | 3) => void;
   setCurrentSectionIndex: (index: number) => void;
   setCurrentBodyIndex: (index: number) => void;
+  setCoverMeta: (patch: Partial<CoverMeta>) => void;
   resetOutline: () => void;
   resetAll: () => void;
 }
@@ -195,6 +201,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     (set, get) => ({
   files: [],
   outline: initialOutline,
+  coverMeta: buildInitialCoverMeta(),
 
   addUploadingFiles: (items) =>
     set((state) => ({
@@ -860,9 +867,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
         }),
 
+      setCoverMeta: (patch) =>
+        set((state) => ({ coverMeta: { ...state.coverMeta, ...patch } })),
+
       resetOutline: () => set({ outline: initialOutline }),
 
-      resetAll: () => set({ files: [], outline: initialOutline }),
+      resetAll: () =>
+        set({
+          files: [],
+          outline: initialOutline,
+          coverMeta: buildInitialCoverMeta(),
+        }),
     }),
     {
       name: 'proposal_writer.outline.v1',
@@ -872,15 +887,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       partialize: (state) => ({
         outline: state.outline,
         files: state.files.filter((f) => f.status === 'parsed'),
+        coverMeta: state.coverMeta,
       }),
       // 스토어 모양 진화 시 누락 필드를 기본값으로 채워 throw 방지.
-      version: 3,
+      version: 4,
       migrate: (persistedState) => {
         const s = persistedState as {
           outline?: Partial<OutlineState>;
           files?: WorkspaceFile[];
+          coverMeta?: Partial<CoverMeta>;
         } | null;
-        if (!s) return { outline: initialOutline, files: [] };
+        if (!s)
+          return {
+            outline: initialOutline,
+            files: [],
+            coverMeta: buildInitialCoverMeta(),
+          };
         const outline: OutlineState = s.outline
           ? {
               currentStep: s.outline.currentStep ?? 1,
@@ -892,7 +914,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const files = Array.isArray(s.files)
           ? s.files.filter((f) => f.status === 'parsed')
           : [];
-        return { outline, files };
+        const coverMeta: CoverMeta = {
+          ...buildInitialCoverMeta(),
+          ...(s.coverMeta ?? {}),
+        };
+        return { outline, files, coverMeta };
       },
     },
   ),

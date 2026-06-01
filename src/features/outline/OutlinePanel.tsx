@@ -14,6 +14,7 @@ import {
   exportOutlineAsJson,
   exportOutlineAsMarkdown,
 } from './exportOutline';
+import ExportDialog from '@/features/export/ExportDialog';
 
 const formatElapsed = (sec: number): string => {
   const m = Math.floor(sec / 60);
@@ -98,6 +99,7 @@ export default function OutlinePanel() {
 
   const onExportJson = () => exportOutlineAsJson(outline);
   const onExportMd = () => exportOutlineAsMarkdown(outline);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   return (
     <div className="flex h-full min-h-[400px] flex-col rounded-lg border border-gray-200 bg-white">
@@ -132,7 +134,11 @@ export default function OutlinePanel() {
               />
             )}
             {hasAnything && (
-              <ExportMenu onJson={onExportJson} onMarkdown={onExportMd} />
+              <ExportMenu
+                onJson={onExportJson}
+                onMarkdown={onExportMd}
+                onOpenDialog={() => setExportDialogOpen(true)}
+              />
             )}
             <HeaderActions
               currentStep={currentStep}
@@ -154,6 +160,11 @@ export default function OutlinePanel() {
           </div>
         </div>
       </header>
+
+      <ExportDialog
+        open={exportDialogOpen}
+        onClose={() => setExportDialogOpen(false)}
+      />
 
       <div className="flex-1 overflow-auto p-4">
         {currentStep === 1 && (
@@ -210,9 +221,11 @@ function ResetButton({ onReset }: { onReset: () => void }) {
 function ExportMenu({
   onJson,
   onMarkdown,
+  onOpenDialog,
 }: {
   onJson: () => void;
   onMarkdown: () => void;
+  onOpenDialog: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -226,7 +239,21 @@ function ExportMenu({
         내보내기 ▾
       </button>
       {open && (
-        <div className="absolute right-0 z-10 mt-1 w-40 rounded border border-gray-200 bg-white py-1 shadow-md">
+        <div className="absolute right-0 z-10 mt-1 w-60 rounded border border-gray-200 bg-white py-1 shadow-md">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onOpenDialog();
+              setOpen(false);
+            }}
+            className="block w-full border-b border-gray-100 px-3 py-2 text-left text-xs font-medium text-gray-800 hover:bg-gray-50"
+          >
+            📝 사업계획서 다운로드…
+            <div className="mt-0.5 text-[10px] font-normal text-gray-500">
+              표지 포함 · DOCX / PDF / Markdown
+            </div>
+          </button>
           <button
             type="button"
             onMouseDown={(e) => {
@@ -236,7 +263,7 @@ function ExportMenu({
             }}
             className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
           >
-            Markdown (.md)
+            Markdown (.md) — 원본
           </button>
           <button
             type="button"
@@ -247,7 +274,7 @@ function ExportMenu({
             }}
             className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
           >
-            JSON (.json)
+            JSON (.json) — 백업/복원
           </button>
         </div>
       )}
