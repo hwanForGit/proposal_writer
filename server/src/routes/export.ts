@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ApiError } from '../middleware/error-handler.js';
 import { markdownToDocx } from '../exporters/docx.js';
+import { markdownToPdf } from '../exporters/pdf.js';
 
 interface ExportMarkdownBody {
   markdown: string;
@@ -56,6 +57,41 @@ exportRouter.post('/export/docx', async (req, res, next) => {
     }
     return next(
       new ApiError(500, 'DOCX_CONVERSION_FAILED', message, {
+        cause: String(err),
+      }),
+    );
+  }
+});
+
+exportRouter.post('/export/pdf', async (req, res, next) => {
+  if (!isBody(req.body)) {
+    return next(
+      new ApiError(400, 'INVALID_BODY', 'markdown 필드가 필요합니다'),
+    );
+  }
+  const { markdown } = req.body;
+  const filename = req.body.filename?.trim() || 'proposal.pdf';
+  if (!markdown.trim()) {
+    return next(new ApiError(400, 'EMPTY_MARKDOWN', '마크다운이 비어있습니다'));
+  }
+  try {
+    console.log(`[export pdf] markdown=${markdown.length}자`);
+    const startedAt = Date.now();
+    const buffer = await markdownToPdf(markdown);
+    console.log(
+      `[export pdf] done in ${Date.now() - startedAt}ms, output=${buffer.length} bytes`,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    res.send(buffer);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[export pdf]', message);
+    return next(
+      new ApiError(500, 'PDF_CONVERSION_FAILED', message, {
         cause: String(err),
       }),
     );

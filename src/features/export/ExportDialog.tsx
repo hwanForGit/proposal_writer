@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ApiError, exportMarkdownAsDocx } from '@/lib/api';
+import { ApiError, exportMarkdownAsDocx, exportMarkdownAsPdf } from '@/lib/api';
 import { useWorkspaceStore } from '@/features/workspace/store';
 import { buildCombinedMarkdown } from './buildCombinedMarkdown';
 import type { CoverMeta } from './types';
@@ -65,6 +65,25 @@ export default function ExportDialog({ open, onClose }: Props) {
       const md = buildCombinedMarkdown(outline, coverMeta);
       const filename = `${baseFilename()}.docx`;
       const blob = await exportMarkdownAsDocx(md, filename);
+      downloadBlob(blob, filename);
+      onClose();
+    } catch (err) {
+      setError({
+        code: err instanceof ApiError ? err.code : 'UNEXPECTED',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const onPdf = async () => {
+    setError(null);
+    setWorking('pdf');
+    try {
+      const md = buildCombinedMarkdown(outline, coverMeta);
+      const filename = `${baseFilename()}.pdf`;
+      const blob = await exportMarkdownAsPdf(md, filename);
       downloadBlob(blob, filename);
       onClose();
     } catch (err) {
@@ -185,11 +204,11 @@ export default function ExportDialog({ open, onClose }: Props) {
           </button>
           <button
             type="button"
-            disabled
-            title="M25에서 활성화"
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white opacity-50"
+            onClick={onPdf}
+            disabled={working !== null}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            PDF
+            {working === 'pdf' ? 'PDF 생성 중…' : 'PDF 다운로드'}
           </button>
         </div>
       </div>

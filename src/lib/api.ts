@@ -175,13 +175,14 @@ export interface BodySectionResponse {
   elapsedMs: number;
 }
 
-export async function exportMarkdownAsDocx(
+async function exportMarkdownAsBinary(
+  endpoint: string,
   markdown: string,
   filename: string,
 ): Promise<Blob> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/api/export/docx`, {
+    res = await fetch(`${API_BASE}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ markdown, filename }),
@@ -206,6 +207,12 @@ export async function exportMarkdownAsDocx(
   }
   return res.blob();
 }
+
+export const exportMarkdownAsDocx = (markdown: string, filename: string) =>
+  exportMarkdownAsBinary('/api/export/docx', markdown, filename);
+
+export const exportMarkdownAsPdf = (markdown: string, filename: string) =>
+  exportMarkdownAsBinary('/api/export/pdf', markdown, filename);
 
 export async function generateBodySection(input: {
   announcementFiles: OutlineGenerateInputFile[];
