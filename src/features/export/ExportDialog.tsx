@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { ApiError, exportMarkdownAsDocx, exportMarkdownAsPdf } from '@/lib/api';
 import { useWorkspaceStore } from '@/features/workspace/store';
-import { buildCombinedMarkdown } from './buildCombinedMarkdown';
+import { buildCombinedMarkdown, type ExportScope } from './buildCombinedMarkdown';
 import { VALIDATION_SAMPLE_MARKDOWN } from './validationSample';
 import type { CoverMeta } from './types';
+
+const SCOPE_FILENAME_SUFFIX: Record<ExportScope, string> = {
+  'full': '',
+  'outline-with-guide': '-outline',
+  'titles-only': '-titles',
+};
 
 interface Props {
   open: boolean;
@@ -41,7 +47,7 @@ export default function ExportDialog({ open, onClose }: Props) {
     format: 'markdown' | 'docx' | 'pdf';
     filename: string;
   }>(null);
-  const [includeBody, setIncludeBody] = useState(true);
+  const [scope, setScope] = useState<ExportScope>('full');
 
   if (!open) return null;
 
@@ -50,12 +56,10 @@ export default function ExportDialog({ open, onClose }: Props) {
 
   const baseFilename = () => {
     const slug = coverMeta.projectName.trim() || 'proposal';
-    const suffix = includeBody ? '' : '-outline-only';
-    return `${slug}${suffix}-${stamp()}`;
+    return `${slug}${SCOPE_FILENAME_SUFFIX[scope]}-${stamp()}`;
   };
 
-  const buildMd = () =>
-    buildCombinedMarkdown(outline, coverMeta, { includeBody });
+  const buildMd = () => buildCombinedMarkdown(outline, coverMeta, { scope });
 
   const onMarkdown = () => {
     setError(null);
@@ -205,8 +209,8 @@ export default function ExportDialog({ open, onClose }: Props) {
             <input
               type="radio"
               name="export-scope"
-              checked={includeBody}
-              onChange={() => setIncludeBody(true)}
+              checked={scope === 'full'}
+              onChange={() => setScope('full')}
               className="mt-0.5"
             />
             <span>
@@ -218,13 +222,26 @@ export default function ExportDialog({ open, onClose }: Props) {
             <input
               type="radio"
               name="export-scope"
-              checked={!includeBody}
-              onChange={() => setIncludeBody(false)}
+              checked={scope === 'outline-with-guide'}
+              onChange={() => setScope('outline-with-guide')}
               className="mt-0.5"
             />
             <span>
-              <span className="font-medium">아웃라인만</span> — 표지 + (선택)Step
-              1 + 아웃라인 트리만 (Step 3 본문 제외, 트리 구조 확인용)
+              <span className="font-medium">아웃라인 + 가이드</span> — 표지 +
+              (선택)Step 1 + 아웃라인 트리 + 가이드 박스 (Step 3 본문 제외)
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs text-gray-800">
+            <input
+              type="radio"
+              name="export-scope"
+              checked={scope === 'titles-only'}
+              onChange={() => setScope('titles-only')}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">제목 트리만</span> — 대·중·소분류
+              제목만 (가이드·본문 모두 제외, 회람·구조 확인용)
             </span>
           </label>
         </div>

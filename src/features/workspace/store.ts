@@ -514,7 +514,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     const refs: BodyItemRef[] = [];
     for (const sec of outline.step2.sections) {
       if (!sec.markdown) continue;
-      const tree = parseSection(sec.markdown);
+      const tree = parseSection(sec.markdown, sec.title);
       tree.midNodes.forEach((mid, mIdx) => {
         refs.push({
           mainIndex: sec.index,

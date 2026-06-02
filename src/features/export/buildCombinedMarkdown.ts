@@ -1,12 +1,20 @@
+import { parseSection, serializeTitlesOnly } from '@/features/outline/sectionTree';
 import type { OutlineState } from '@/features/workspace/store';
 import type { CoverMeta } from './types';
 
+/**
+ * 다운로드 범위 옵션.
+ * - 'full'              : 표지 + (선택)Step 1 + 아웃라인(트리·가이드 포함) + 본문 + 부록
+ * - 'outline-with-guide': 표지 + (선택)Step 1 + 아웃라인(트리·가이드 포함). 본문 제외
+ * - 'titles-only'       : 표지 + (선택)Step 1 + 제목 트리만(대·중·소분류 제목). 가이드·본문 모두 제외
+ */
+export type ExportScope = 'full' | 'outline-with-guide' | 'titles-only';
+
 export interface BuildOptions {
-  /** Step 3 본문 포함 여부 (false면 아웃라인만 = 트리 구조까지) */
-  includeBody: boolean;
+  scope: ExportScope;
 }
 
-const DEFAULT_OPTIONS: BuildOptions = { includeBody: true };
+const DEFAULT_OPTIONS: BuildOptions = { scope: 'full' };
 
 const trim = (s: string | null | undefined): string => (s ?? '').trim();
 
@@ -16,6 +24,8 @@ export function buildCombinedMarkdown(
   options: BuildOptions = DEFAULT_OPTIONS,
 ): string {
   const parts: string[] = [];
+  const includeBody = options.scope === 'full';
+  const includeGuide = options.scope !== 'titles-only';
 
   // 표지
   const hasCover =
@@ -53,16 +63,24 @@ export function buildCombinedMarkdown(
     parts.push('');
 
     for (const section of outline.step2.sections) {
-      if (!trim(section.markdown)) continue;
+      const sectionMd = trim(section.markdown);
+      if (!sectionMd) continue;
       // 대분류 헤딩
       parts.push(`### ${section.index}. ${section.title}`);
       parts.push('');
-      // 트리 마크다운 그대로 (대분류·중분류·소분류 + 가이드)
-      parts.push(trim(section.markdown));
+      if (includeGuide) {
+        // 트리 마크다운 그대로 (대·중·소분류 + 가이드)
+        parts.push(sectionMd);
+      } else {
+        // 가이드 제외 — 제목 트리만 정리해서 출력
+        const tree = parseSection(sectionMd, section.title);
+        const titles = serializeTitlesOnly(tree);
+        if (titles) parts.push(titles);
+      }
       parts.push('');
 
       // 같은 대분류에 속하는 Step 3 본문들 (옵션에 따라)
-      if (options.includeBody) {
+      if (includeBody) {
         const bodies = outline.step3.bodies.filter(
           (b) => b.ref.mainIndex === section.index && trim(b.markdown),
         );
@@ -80,7 +98,7 @@ export function buildCombinedMarkdown(
 
   // 부록 — Step 3 본문들의 "[부록]" 섹션 자동 취합 (본문 포함 시에만)
   const appendixes: string[] = [];
-  if (options.includeBody) {
+  if (includeBody) {
     for (const body of outline.step3.bodies) {
       const md = trim(body.markdown);
       if (!md) continue;

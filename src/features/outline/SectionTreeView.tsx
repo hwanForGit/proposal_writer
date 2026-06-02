@@ -12,12 +12,17 @@ import {
 
 interface Props {
   markdown: string;
+  /** LLM 응답에서 섹션 헤더가 비어/누락된 경우의 fallback 제목 (Step 2 sections[i].title). */
+  fallbackTitle?: string;
   onSave: (next: string) => void;
 }
 
-export default function SectionTreeView({ markdown, onSave }: Props) {
+export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Props) {
   // 외부 markdown이 변하면(예: 재생성) 트리 재파싱.
-  const parsed = useMemo(() => parseSection(markdown), [markdown]);
+  const parsed = useMemo(
+    () => parseSection(markdown, fallbackTitle),
+    [markdown, fallbackTitle],
+  );
   const [tree, setTree] = useState<SectionTree>(parsed);
 
   // 외부 markdown이 갱신되면 트리 동기화

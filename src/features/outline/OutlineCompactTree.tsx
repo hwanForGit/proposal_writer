@@ -45,7 +45,7 @@ export default function OutlineCompactTree({
               </li>
             );
           }
-          const tree = parseSection(section.markdown);
+          const tree = parseSection(section.markdown, section.title);
           return (
             <SectionTreeRow
               key={section.index}

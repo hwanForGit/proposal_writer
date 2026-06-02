@@ -767,7 +767,7 @@ function CurrentSectionView({
     return <ErrorView code={section.error.code} message={section.error.message} />;
   }
   if (section.markdown) {
-    const parsed = parseSection(section.markdown);
+    const parsed = parseSection(section.markdown, section.title);
     const useTree = hasValidStructure(parsed);
     return (
       <div className="space-y-3">
@@ -785,7 +785,11 @@ function CurrentSectionView({
         </div>
         <TruncationWarning finishReason={section.finishReason} />
         {useTree && onSave ? (
-          <SectionTreeView markdown={section.markdown} onSave={onSave} />
+          <SectionTreeView
+            markdown={section.markdown}
+            fallbackTitle={section.title}
+            onSave={onSave}
+          />
         ) : (
           <MarkdownView
             markdown={section.markdown}
