@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useWorkspaceStore } from '@/features/workspace/store';
+import { isTruncated, useWorkspaceStore } from '@/features/workspace/store';
 import type {
   BodyState,
   OutlineStepState,
+  PageAllocationState,
   SectionState,
   Step2State,
   Step3State,
@@ -42,7 +43,27 @@ export default function OutlinePanel() {
     (s) => s.setCurrentSectionIndex,
   );
   const setCurrentBodyIndex = useWorkspaceStore((s) => s.setCurrentBodyIndex);
+  const runAll = useWorkspaceStore((s) => s.runAll);
+  const stopAutoRun = useWorkspaceStore((s) => s.stopAutoRun);
+  const autoRunActive = useWorkspaceStore((s) => s.autoRunActive);
+  const autoRunStop = useWorkspaceStore((s) => s.autoRunStop);
+  const pendingContinue = useWorkspaceStore((s) => s.pendingContinue);
+  const resolveContinue = useWorkspaceStore((s) => s.resolveContinue);
+  const pageLimit = useWorkspaceStore((s) => s.pageLimit);
+  const setPageLimit = useWorkspaceStore((s) => s.setPageLimit);
+  const pageAllocation = useWorkspaceStore((s) => s.pageAllocation);
+  const generatePageAllocation = useWorkspaceStore(
+    (s) => s.generatePageAllocation,
+  );
   const resetAll = useWorkspaceStore((s) => s.resetAll);
+
+  const pageByKey = useMemo(() => {
+    const m = new Map<string, number>();
+    if (pageAllocation.status === 'ready') {
+      for (const it of pageAllocation.items) m.set(it.key, it.pages);
+    }
+    return m;
+  }, [pageAllocation]);
 
   const { canGenerate, reason } = useMemo<{
     canGenerate: boolean;
@@ -141,23 +162,41 @@ export default function OutlinePanel() {
                 onOpenDialog={() => setExportDialogOpen(true)}
               />
             )}
-            <HeaderActions
-              currentStep={currentStep}
-              canGenerate={canGenerate}
-              step1={step1}
-              step2={step2}
-              step3={step3}
-              currentSection={currentSection}
-              currentBody={currentBody}
-              onStartStep1={generateStep1}
-              onProceedToStep2={proceedToStep2}
-              onRetryStep2Sections={retryStep2Sections}
-              onRetryCurrentSection={retryCurrentSection}
-              onNextSection={nextSection}
-              onProceedToStep3={proceedToStep3}
-              onRetryCurrentBody={retryCurrentBody}
-              onNextBody={nextBody}
-            />
+            {autoRunActive ? (
+              <AutoRunIndicator
+                stopRequested={autoRunStop}
+                onStop={stopAutoRun}
+              />
+            ) : (
+              <>
+                {canGenerate && step2.status !== 'all-done' && (
+                  <RunToOutlineButton onClick={() => runAll('step2')} />
+                )}
+                {canGenerate && step3.status !== 'all-done' && (
+                  <RunAllButton
+                    onClick={() => runAll('step3')}
+                    started={hasAnything}
+                  />
+                )}
+                <HeaderActions
+                  currentStep={currentStep}
+                  canGenerate={canGenerate}
+                  step1={step1}
+                  step2={step2}
+                  step3={step3}
+                  currentSection={currentSection}
+                  currentBody={currentBody}
+                  onStartStep1={generateStep1}
+                  onProceedToStep2={proceedToStep2}
+                  onRetryStep2Sections={retryStep2Sections}
+                  onRetryCurrentSection={retryCurrentSection}
+                  onNextSection={nextSection}
+                  onProceedToStep3={proceedToStep3}
+                  onRetryCurrentBody={retryCurrentBody}
+                  onNextBody={nextBody}
+                />
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -166,6 +205,14 @@ export default function OutlinePanel() {
         open={exportDialogOpen}
         onClose={() => setExportDialogOpen(false)}
       />
+
+      {pendingContinue && (
+        <ContinueModal
+          midTitle={pendingContinue.midTitle}
+          onContinue={() => resolveContinue(true)}
+          onStop={() => resolveContinue(false)}
+        />
+      )}
 
       <div className="flex-1 overflow-auto p-4">
         {currentStep === 1 && (
@@ -186,6 +233,11 @@ export default function OutlinePanel() {
               setSectionMarkdown(step2.currentSectionIndex, md)
             }
             onJumpSection={setCurrentSectionIndex}
+            pageLimit={pageLimit}
+            onSetPageLimit={setPageLimit}
+            pageAllocation={pageAllocation}
+            onGenerateAllocation={generatePageAllocation}
+            pageByKey={pageByKey}
           />
         )}
         {currentStep === 3 && (
@@ -279,6 +331,114 @@ function ExportMenu({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Run-all (한 번에 끝까지) ──────────────────────────────────────
+
+function RunToOutlineButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+      title="Step 1(사전 분석)과 Step 2(대분류·중분류 아웃라인 구조)까지만 자동으로 생성하고, 본문 작성 직전에 멈춥니다."
+    >
+      📑 아웃라인까지 자동
+    </button>
+  );
+}
+
+function RunAllButton({
+  onClick,
+  started,
+}: {
+  onClick: () => void;
+  started: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+      title="Step 1부터 마지막 본문까지 자동으로 진행합니다. 본문이 분량 한도로 끊기면 이어쓸지 물어봅니다."
+    >
+      🚀 {started ? '이어서 끝까지 자동' : '한 번에 끝까지 작성'}
+    </button>
+  );
+}
+
+function AutoRunIndicator({
+  stopRequested,
+  onStop,
+}: {
+  stopRequested: boolean;
+  onStop: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <span className="inline-flex items-center gap-1.5 rounded bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700">
+        <span className="inline-block size-2 animate-pulse rounded-full bg-indigo-500" />
+        {stopRequested ? '정지 중… (현재 작업 완료 후 멈춤)' : '자동 진행 중…'}
+      </span>
+      {!stopRequested && (
+        <button
+          type="button"
+          onClick={onStop}
+          className="rounded border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+        >
+          정지
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── 자동 진행 중 이어쓰기 확인 모달 ───────────────────────────────
+
+function ContinueModal({
+  midTitle,
+  onContinue,
+  onStop,
+}: {
+  midTitle: string;
+  onContinue: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl">
+        <div className="flex items-start gap-3">
+          <span className="text-xl">⚠️</span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-gray-900">
+              본문이 분량 한도로 끊겼습니다
+            </h3>
+            <p className="mt-1 text-xs text-gray-600">
+              <span className="font-medium text-gray-800">“{midTitle}”</span>{' '}
+              본문이 <span className="font-mono">max_tokens</span> 한도에 닿아
+              도중에 끊겼습니다. 이어서 마저 작성할까요?
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onStop}
+            className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            아니오 (여기서 멈춤)
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+          >
+            예, 이어쓰고 계속
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -626,6 +786,11 @@ interface Step2ViewProps {
   elapsedSec: number;
   onSaveSection?: (next: string) => void;
   onJumpSection?: (index: number) => void;
+  pageLimit: number | null;
+  onSetPageLimit: (pages: number | null) => void;
+  pageAllocation: PageAllocationState;
+  onGenerateAllocation: () => void;
+  pageByKey: Map<string, number>;
 }
 
 function Step2View({
@@ -634,6 +799,11 @@ function Step2View({
   elapsedSec,
   onSaveSection,
   onJumpSection,
+  pageLimit,
+  onSetPageLimit,
+  pageAllocation,
+  onGenerateAllocation,
+  pageByKey,
 }: Step2ViewProps) {
   if (step2.status === 'fetching-sections') {
     return <ProgressView title="대분류 목록 추출 중" elapsedSec={elapsedSec} />;
@@ -684,6 +854,15 @@ function Step2View({
         </div>
       </div>
 
+      {/* 페이지 배분 패널 */}
+      <AllocationPanel
+        sections={step2.sections}
+        pageLimit={pageLimit}
+        onSetPageLimit={onSetPageLimit}
+        pageAllocation={pageAllocation}
+        onGenerate={onGenerateAllocation}
+      />
+
       {/* 현재 대분류 본문 */}
       <CurrentSectionView
         section={step2.sections[step2.currentSectionIndex]!}
@@ -696,7 +875,93 @@ function Step2View({
         sections={step2.sections}
         currentSectionIndex={step2.currentSectionIndex}
         onJumpSection={onJumpSection}
+        pageByKey={pageByKey}
       />
+    </div>
+  );
+}
+
+// ─── 페이지 배분 패널 ───────────────────────────────────────────────
+
+function fmtPages(p: number): string {
+  return Number.isInteger(p) ? `${p}` : p.toFixed(1);
+}
+
+function AllocationPanel({
+  sections,
+  pageLimit,
+  onSetPageLimit,
+  pageAllocation,
+  onGenerate,
+}: {
+  sections: SectionState[];
+  pageLimit: number | null;
+  onSetPageLimit: (pages: number | null) => void;
+  pageAllocation: PageAllocationState;
+  onGenerate: () => void;
+}) {
+  const allReady =
+    sections.length > 0 && sections.every((s) => s.status === 'ready');
+  const generating = pageAllocation.status === 'generating';
+  const total = pageAllocation.items.reduce((sum, it) => sum + it.pages, 0);
+
+  return (
+    <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold text-indigo-900">📐 페이지 배분</span>
+        <span className="text-indigo-700">목표</span>
+        <input
+          type="number"
+          min={1}
+          max={300}
+          value={pageLimit ?? ''}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            onSetPageLimit(v === '' ? null : Number(v));
+          }}
+          placeholder="예: 20"
+          className="w-20 rounded border border-indigo-300 px-2 py-1 text-right text-xs focus:border-indigo-500 focus:outline-none"
+        />
+        <span className="text-indigo-700">페이지</span>
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={!allReady || !pageLimit || generating}
+          className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          title={
+            !allReady
+              ? '모든 대분류가 생성된 뒤 배분할 수 있습니다.'
+              : '중요도·강점 기반으로 중분류별 페이지를 배분합니다.'
+          }
+        >
+          {generating
+            ? '배분 계산 중…'
+            : pageAllocation.status === 'ready'
+              ? '다시 배분'
+              : '페이지 배분'}
+        </button>
+      </div>
+
+      {!allReady && (
+        <p className="mt-1.5 text-[11px] text-indigo-700/80">
+          모든 대분류가 생성되면 배분할 수 있어요. (현재{' '}
+          {sections.filter((s) => s.status === 'ready').length}/{sections.length})
+        </p>
+      )}
+
+      {pageAllocation.status === 'error' && pageAllocation.error && (
+        <p className="mt-1.5 text-[11px] text-red-600">
+          {pageAllocation.error.message}
+        </p>
+      )}
+
+      {pageAllocation.status === 'ready' && (
+        <p className="mt-1.5 text-[11px] text-indigo-800">
+          ✓ {pageAllocation.items.length}개 중분류에 총 ≈{fmtPages(total)}페이지
+          배분됨. 아래 구조 트리에서 중분류별 장수를 확인하세요. 이 배분대로 본문
+          분량이 조절됩니다.
+        </p>
+      )}
     </div>
   );
 }
@@ -1040,7 +1305,7 @@ function CurrentBodyView({
     return <ErrorView code={body.error.code} message={body.error.message} />;
   }
   if (body.markdown) {
-    const truncated = body.finishReason === 'length';
+    const truncated = isTruncated(body.finishReason);
     const isContinuing = body.status === 'generating'; // markdown 있는데 generating == 이어쓰기 중
     return (
       <div className="space-y-3">
@@ -1122,12 +1387,12 @@ function BodyTruncationNotice({
 }
 
 function TruncationWarning({ finishReason }: { finishReason: string | null }) {
-  if (finishReason !== 'length') return null;
+  if (!isTruncated(finishReason)) return null;
   return (
     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-      ⚠️ 모델 출력이 <span className="font-mono">max_tokens</span> 한도(8000)에
-      닿아 도중에 잘렸습니다. 더 짧게 작성되도록 다시 시도하거나, max_tokens를
-      늘려야 할 수 있어요.
+      ⚠️ 모델 출력이 <span className="font-mono">max_tokens</span> 한도에 닿아
+      도중에 잘렸습니다. [이어서 작성]으로 마저 쓰거나, 더 짧게 작성되도록 다시
+      시도할 수 있어요.
     </div>
   );
 }

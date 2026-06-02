@@ -6,12 +6,17 @@ interface Props {
   sections: SectionState[];
   currentSectionIndex: number;
   onJumpSection?: (index: number) => void;
+  pageByKey?: Map<string, number>;
 }
+
+const fmtPages = (p: number): string =>
+  Number.isInteger(p) ? `${p}` : p.toFixed(1);
 
 export default function OutlineCompactTree({
   sections,
   currentSectionIndex,
   onJumpSection,
+  pageByKey,
 }: Props) {
   const ready = sections.filter((s) => s.status === 'ready' && s.markdown);
 
@@ -54,6 +59,7 @@ export default function OutlineCompactTree({
               midNodes={tree.midNodes}
               isCurrent={idx === currentSectionIndex}
               onJump={onJumpSection ? () => onJumpSection(idx) : undefined}
+              pageByKey={pageByKey}
             />
           );
         })}
@@ -68,6 +74,7 @@ interface SectionRowProps {
   midNodes: MidNode[];
   isCurrent: boolean;
   onJump?: () => void;
+  pageByKey?: Map<string, number>;
 }
 
 function SectionTreeRow({
@@ -76,9 +83,16 @@ function SectionTreeRow({
   midNodes,
   isCurrent,
   onJump,
+  pageByKey,
 }: SectionRowProps) {
   const [open, setOpen] = useState(true);
   const hasChildren = midNodes.length > 0;
+  const sectionTotal = pageByKey
+    ? midNodes.reduce(
+        (sum, _m, i) => sum + (pageByKey.get(`${displayIndex}-${i}`) ?? 0),
+        0,
+      )
+    : 0;
   return (
     <li>
       <div className="flex items-center gap-1">
@@ -111,11 +125,20 @@ function SectionTreeRow({
             {displayIndex}. {title}
           </span>
         )}
+        {sectionTotal > 0 && (
+          <span className="ml-1 shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+            합계 ≈{fmtPages(sectionTotal)}p
+          </span>
+        )}
       </div>
       {open && hasChildren && (
         <ul className="mt-1 ml-2 space-y-0.5 border-l border-gray-200 pl-3">
-          {midNodes.map((mid) => (
-            <MidTreeRow key={mid.id} mid={mid} />
+          {midNodes.map((mid, i) => (
+            <MidTreeRow
+              key={mid.id}
+              mid={mid}
+              pages={pageByKey?.get(`${displayIndex}-${i}`)}
+            />
           ))}
         </ul>
       )}
@@ -123,7 +146,7 @@ function SectionTreeRow({
   );
 }
 
-function MidTreeRow({ mid }: { mid: MidNode }) {
+function MidTreeRow({ mid, pages }: { mid: MidNode; pages?: number }) {
   const [open, setOpen] = useState(true);
   const hasChildren = mid.subNodes.length > 0;
   // 마크다운 굵게(**) 표시 제거
@@ -142,6 +165,11 @@ function MidTreeRow({ mid }: { mid: MidNode }) {
           {open ? '▾' : '▸'}
         </button>
         <span className="text-[13px] text-gray-800">{cleanTitle}</span>
+        {pages != null && pages > 0 && (
+          <span className="ml-1 shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+            ≈{fmtPages(pages)}p
+          </span>
+        )}
       </div>
       {open && hasChildren && (
         <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-gray-200 pl-3">

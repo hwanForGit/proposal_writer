@@ -5,6 +5,7 @@ import {
   fetchStep2Sections,
   generateBodySection,
   generateOutlineStep1,
+  generatePageAllocation,
   generateStep2Section,
   type OutlineUsage,
 } from '@/lib/api';
@@ -142,10 +143,46 @@ const initialOutline: OutlineState = {
   step3: { ...initialStep3 },
 };
 
+// ── 페이지 배분 (중분류별 목표 장수) ────────────────────────────────
+export interface AllocationItem {
+  key: string; // `${mainIndex}-${midIndex}` (body id와 동일 좌표계)
+  mainIndex: number;
+  midIndex: number;
+  mainTitle: string;
+  midTitle: string;
+  pages: number; // 배정 페이지 (0.5 단위)
+  weight: number; // LLM 중요도 가중치 (1~10)
+  reason: string; // 배분 근거 한 줄
+}
+
+export type PageAllocationStatus = 'idle' | 'generating' | 'ready' | 'error';
+
+export interface PageAllocationState {
+  status: PageAllocationStatus;
+  items: AllocationItem[];
+  error: { code: string; message: string } | null;
+}
+
+const initialPageAllocation: PageAllocationState = {
+  status: 'idle',
+  items: [],
+  error: null,
+};
+
 interface WorkspaceState {
   files: WorkspaceFile[];
   outline: OutlineState;
   coverMeta: CoverMeta;
+  // 페이지 배분: 사용자가 입력한 목표 총 페이지 + LLM 배분 결과
+  pageLimit: number | null;
+  pageAllocation: PageAllocationState;
+  // 자동 진행(한 번에 끝까지) 상태 — 영속화하지 않음(transient)
+  autoRunActive: boolean;
+  autoRunStop: boolean;
+  // 자동 진행 중 화면이 생성 위치를 따라갈지. 사용자가 직접 이동하면 false → 머무름.
+  autoFollowView: boolean;
+  // 자동 진행 중 본문이 잘려 이어쓰기 여부를 물어보는 모달 상태(null=닫힘).
+  pendingContinue: { bodyIndex: number; midTitle: string } | null;
 
   addUploadingFiles: (items: UploadingInit[]) => void;
   markParsed: (id: string, payload: ParsedPayload) => void;
@@ -157,20 +194,26 @@ interface WorkspaceState {
   setStep1Markdown: (markdown: string) => void;
   proceedToStep2: () => Promise<void>;
   retryStep2Sections: () => Promise<void>;
-  generateCurrentSection: () => Promise<void>;
+  generateCurrentSection: (index?: number) => Promise<void>;
   retryCurrentSection: () => Promise<void>;
   setSectionMarkdown: (index: number, markdown: string) => void;
   nextSection: () => Promise<void>;
   proceedToStep3: () => Promise<void>;
-  generateCurrentBody: () => Promise<void>;
+  generateCurrentBody: (index?: number) => Promise<void>;
   retryCurrentBody: () => Promise<void>;
-  continueCurrentBody: () => Promise<void>;
+  continueCurrentBody: (index?: number) => Promise<void>;
   setBodyMarkdown: (index: number, markdown: string) => void;
   nextBody: () => Promise<void>;
   setCurrentStep: (step: 1 | 2 | 3) => void;
   setCurrentSectionIndex: (index: number) => void;
   setCurrentBodyIndex: (index: number) => void;
   setCoverMeta: (patch: Partial<CoverMeta>) => void;
+  // stopAfter: 'step2'면 아웃라인 구조(Step 2 all-done)까지만, 'step3'(기본)이면 본문 끝까지.
+  runAll: (stopAfter?: 'step2' | 'step3') => Promise<void>;
+  stopAutoRun: () => void;
+  resolveContinue: (decision: boolean) => void;
+  setPageLimit: (pages: number | null) => void;
+  generatePageAllocation: () => Promise<void>;
   resetOutline: () => void;
   resetAll: () => void;
 }
@@ -196,12 +239,27 @@ const errInfo = (err: unknown): { code: string; message: string } => ({
   message: err instanceof Error ? err.message : String(err),
 });
 
+// 본문이 분량 한도로 잘렸는지 — 게이트웨이/모델별로 'length'(OpenAI) 또는
+// 'max_tokens'(Anthropic 계열)로 올 수 있어 둘 다 잘림으로 본다.
+export const isTruncated = (finishReason: string | null | undefined): boolean =>
+  finishReason === 'length' || finishReason === 'max_tokens';
+
+// 자동 진행 중 이어쓰기 확인 모달의 사용자 응답을 기다리는 resolver.
+// 동시에 하나의 자동 진행만 존재하므로 모듈 스코프 단일 변수로 충분하다.
+let continueResolver: ((decision: boolean) => void) | null = null;
+
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
   files: [],
   outline: initialOutline,
   coverMeta: buildInitialCoverMeta(),
+  pageLimit: null,
+  pageAllocation: { ...initialPageAllocation },
+  autoRunActive: false,
+  autoRunStop: false,
+  autoFollowView: true,
+  pendingContinue: null,
 
   addUploadingFiles: (items) =>
     set((state) => ({
@@ -285,10 +343,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
   // ── Step 2 ──────────────────────────────────────────────────────
   proceedToStep2: async () => {
+    const keepView = get().autoRunActive && !get().autoFollowView;
     set((state) => ({
       outline: {
         ...state.outline,
-        currentStep: 2,
+        currentStep: keepView ? state.outline.currentStep : 2,
         step2: { ...initialStep2, status: 'fetching-sections' },
       },
     }));
@@ -359,10 +418,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }
   },
 
-  generateCurrentSection: async () => {
+  generateCurrentSection: async (index?: number) => {
     const { files, outline } = get();
     const { step2, step1 } = outline;
-    const i = step2.currentSectionIndex;
+    const i = index ?? step2.currentSectionIndex;
     const section = step2.sections[i];
     if (!section) return;
     if (!step1.markdown) return;
@@ -510,6 +569,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
   proceedToStep3: async () => {
     const { outline } = get();
+    const keepView = get().autoRunActive && !get().autoFollowView;
     // Step 2 모든 sections의 마크다운에서 중분류 추출 → 평면 본문 목록
     const refs: BodyItemRef[] = [];
     for (const sec of outline.step2.sections) {
@@ -530,7 +590,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       set((state) => ({
         outline: {
           ...state.outline,
-          currentStep: 3,
+          currentStep: keepView ? state.outline.currentStep : 3,
           step3: {
             ...initialStep3,
             status: 'error',
@@ -561,7 +621,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     set((state) => ({
       outline: {
         ...state.outline,
-        currentStep: 3,
+        currentStep: keepView ? state.outline.currentStep : 3,
         step3: {
           status: 'in-progress',
           bodies,
@@ -574,10 +634,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     await get().generateCurrentBody();
   },
 
-  generateCurrentBody: async () => {
+  generateCurrentBody: async (index?: number) => {
     const { files, outline } = get();
     const { step3, step2, step1 } = outline;
-    const i = step3.currentBodyIndex;
+    const i = index ?? step3.currentBodyIndex;
     const body = step3.bodies[i];
     if (!body) return;
     if (!step1.markdown) {
@@ -699,10 +759,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     await get().generateCurrentBody();
   },
 
-  continueCurrentBody: async () => {
+  continueCurrentBody: async (index?: number) => {
     const { files, outline } = get();
     const { step3, step2, step1 } = outline;
-    const i = step3.currentBodyIndex;
+    const i = index ?? step3.currentBodyIndex;
     const body = step3.bodies[i];
     if (!body || !body.markdown || !step1.markdown) return;
 
@@ -835,8 +895,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     await get().generateCurrentBody();
   },
 
+      // 아래 세 setter는 사용자의 직접 이동(스텝퍼/뱃지 클릭)에서만 호출된다.
+      // 자동 진행 중이라면 화면 따라가기를 끊어, 사용자가 보는 위치에 머물게 한다.
       setCurrentStep: (step) =>
         set((state) => ({
+          autoFollowView: false,
           outline: { ...state.outline, currentStep: step },
         })),
 
@@ -848,6 +911,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           )
             return state;
           return {
+            autoFollowView: false,
             outline: {
               ...state.outline,
               step2: { ...state.outline.step2, currentSectionIndex: index },
@@ -860,6 +924,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (index < 0 || index >= state.outline.step3.bodies.length)
             return state;
           return {
+            autoFollowView: false,
             outline: {
               ...state.outline,
               step3: { ...state.outline.step3, currentBodyIndex: index },
@@ -870,13 +935,269 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setCoverMeta: (patch) =>
         set((state) => ({ coverMeta: { ...state.coverMeta, ...patch } })),
 
-      resetOutline: () => set({ outline: initialOutline }),
+      // ── 페이지 배분 ───────────────────────────────────────────────
+      setPageLimit: (pages) =>
+        set({ pageLimit: pages != null && pages > 0 ? pages : null }),
+
+      generatePageAllocation: async () => {
+        const { files, outline, pageLimit } = get();
+        const { step2, step1 } = outline;
+        if (!pageLimit || pageLimit <= 0) {
+          set({
+            pageAllocation: {
+              status: 'error',
+              items: [],
+              error: { code: 'NO_PAGE_LIMIT', message: '목표 페이지 수를 입력해주세요.' },
+            },
+          });
+          return;
+        }
+
+        // 중분류 평면 목록 (body 좌표계와 동일: key = `${mainIndex}-${midIndex}`)
+        const items = step2.sections.flatMap((sec) => {
+          if (!sec.markdown) return [];
+          const tree = parseSection(sec.markdown, sec.title);
+          return tree.midNodes.map((mid, mIdx) => ({
+            key: `${sec.index}-${mIdx}`,
+            mainIndex: sec.index,
+            midIndex: mIdx,
+            mainTitle: `[${sec.index}] ${sec.title}`,
+            midTitle: mid.title,
+            midGuidance: mid.guidance,
+          }));
+        });
+
+        if (items.length === 0) {
+          set({
+            pageAllocation: {
+              status: 'error',
+              items: [],
+              error: {
+                code: 'NO_MID_SECTIONS',
+                message: 'Step 2에서 중분류를 추출하지 못했습니다. Step 2 결과를 확인해주세요.',
+              },
+            },
+          });
+          return;
+        }
+
+        set({
+          pageAllocation: { status: 'generating', items: [], error: null },
+        });
+
+        try {
+          const companyPresent = files.some(
+            (f) => f.category === 'company' && f.status === 'parsed',
+          );
+          const res = await generatePageAllocation({
+            step1Markdown: step1.markdown ?? '',
+            companyPresent,
+            pageLimit,
+            items: items.map(({ key, mainTitle, midTitle, midGuidance }) => ({
+              key,
+              mainTitle,
+              midTitle,
+              midGuidance,
+            })),
+          });
+          const byKey = new Map(res.allocations.map((a) => [a.key, a]));
+          const merged: AllocationItem[] = items.map((it) => {
+            const a = byKey.get(it.key);
+            return {
+              key: it.key,
+              mainIndex: it.mainIndex,
+              midIndex: it.midIndex,
+              mainTitle: it.mainTitle,
+              midTitle: it.midTitle,
+              pages: a?.pages ?? 0,
+              weight: a?.weight ?? 0,
+              reason: a?.reason ?? '',
+            };
+          });
+          set({
+            pageAllocation: { status: 'ready', items: merged, error: null },
+          });
+        } catch (err) {
+          set({
+            pageAllocation: { status: 'error', items: [], error: errInfo(err) },
+          });
+        }
+      },
+
+      // ── 한 번에 끝까지 자동 진행 ──────────────────────────────────
+      // Step 1 → Step 2(대분류 순회) → Step 3(본문 순회)를 현재 위치에서
+      // 끝까지 자동으로 몰아간다. 본문이 분량 한도(finishReason==='length')로
+      // 끊기면 잠깐 멈춰 이어쓸지 사용자에게 묻는다.
+      //   예  → 이어쓰고 계속 자동 진행
+      //   아니오 → 자동 진행 종료(해당 본문에 멈춤). 이후 수동 [이어서 작성]/[다음 중분류] 가능.
+      // 에러가 나면 자동 진행을 멈추고 기존 에러/재시도 UI에 맡긴다.
+      // "정지"(stopAutoRun)는 새 호출을 막을 뿐, 진행 중인 호출은 끝까지 둔다.
+      runAll: async (stopAfter: 'step2' | 'step3' = 'step3') => {
+        if (get().autoRunActive) return;
+        set({ autoRunActive: true, autoRunStop: false, autoFollowView: true });
+        const stopped = () => get().autoRunStop;
+        // 화면 따라가기: 사용자가 직접 이동했다면(autoFollowView=false) 건드리지 않는다.
+        const followSection = (i: number) => {
+          if (!get().autoFollowView) return;
+          set((state) => ({
+            outline: {
+              ...state.outline,
+              currentStep: 2,
+              step2: { ...state.outline.step2, currentSectionIndex: i },
+            },
+          }));
+        };
+        const followBody = (i: number) => {
+          if (!get().autoFollowView) return;
+          set((state) => ({
+            outline: {
+              ...state.outline,
+              currentStep: 3,
+              step3: { ...state.outline.step3, currentBodyIndex: i },
+            },
+          }));
+        };
+        try {
+          // ── Step 1 ──
+          if (!stopped() && get().outline.step1.status !== 'ready') {
+            await get().generateStep1();
+            if (get().outline.step1.status !== 'ready') return; // 에러 → 멈춤
+          }
+          if (stopped()) return;
+
+          // ── Step 2: 대분류 목록 확보 (없을 때만) ──
+          {
+            const s2 = get().outline.step2;
+            if (
+              s2.sections.length === 0 ||
+              s2.status === 'idle' ||
+              s2.status === 'error'
+            ) {
+              await get().proceedToStep2();
+              if (get().outline.step2.status === 'error') return;
+            }
+          }
+
+          // ── Step 2: 모든 대분류를 인덱스로 순회 (화면 커서와 무관) ──
+          {
+            const total = get().outline.step2.sections.length;
+            for (let i = 0; i < total; i++) {
+              if (stopped()) return;
+              let sec = get().outline.step2.sections[i];
+              if (!sec) break;
+              if (sec.status === 'error') return; // 멈춤 → 수동 재시도
+              if (sec.status !== 'ready') {
+                followSection(i);
+                await get().generateCurrentSection(i);
+                sec = get().outline.step2.sections[i];
+                if (sec.status !== 'ready') return; // 에러/미완 → 멈춤
+              }
+            }
+            set((state) => ({
+              outline: {
+                ...state.outline,
+                step2: { ...state.outline.step2, status: 'all-done' },
+              },
+            }));
+          }
+          if (stopped()) return;
+          if (stopAfter === 'step2') return; // 아웃라인 구조까지만
+
+          // ── Step 3: 본문 목록 확보 (없을 때만) ──
+          {
+            const s3 = get().outline.step3;
+            if (
+              s3.bodies.length === 0 ||
+              s3.status === 'idle' ||
+              s3.status === 'error'
+            ) {
+              await get().proceedToStep3();
+              if (get().outline.step3.status === 'error') return;
+            }
+          }
+
+          // ── Step 3: 모든 중분류 본문을 인덱스로 순회 ──
+          {
+            const total = get().outline.step3.bodies.length;
+            for (let i = 0; i < total; i++) {
+              if (stopped()) return;
+              let body = get().outline.step3.bodies[i];
+              if (!body) break;
+              if (body.status === 'error') return;
+
+              const willAct =
+                body.status !== 'ready' || isTruncated(body.finishReason);
+              if (willAct) followBody(i);
+
+              if (body.status !== 'ready') {
+                await get().generateCurrentBody(i);
+                body = get().outline.step3.bodies[i];
+                if (body.status === 'error') return;
+              }
+
+              // 분량 한도로 끊긴 경우 이어쓸지 인앱 모달로 확인
+              // (이어쓴 결과가 또 끊기면 반복). window.confirm은 비동기 컨텍스트에서
+              // 브라우저가 무시(취소 처리)할 수 있어 store 상태 기반 모달로 처리한다.
+              while (isTruncated(body.finishReason)) {
+                if (stopped()) return;
+                const targetTitle = body.ref.midTitle;
+                followBody(i);
+                const decision = await new Promise<boolean>((resolve) => {
+                  continueResolver = resolve;
+                  set({ pendingContinue: { bodyIndex: i, midTitle: targetTitle } });
+                });
+                continueResolver = null;
+                set({ pendingContinue: null });
+                if (!decision) return; // 사용자가 멈춤 선택 → finally가 정리
+                await get().continueCurrentBody(i);
+                body = get().outline.step3.bodies[i];
+                if (!body || body.status === 'error') return;
+              }
+            }
+            set((state) => ({
+              outline: {
+                ...state.outline,
+                step3: { ...state.outline.step3, status: 'all-done' },
+              },
+            }));
+          }
+        } finally {
+          set({ autoRunActive: false, autoRunStop: false });
+        }
+      },
+
+      stopAutoRun: () => {
+        set({ autoRunStop: true });
+        // 이어쓰기 확인 모달이 떠 있으면 '멈춤'으로 응답해 즉시 종료시킨다.
+        if (continueResolver) {
+          const r = continueResolver;
+          continueResolver = null;
+          set({ pendingContinue: null });
+          r(false);
+        }
+      },
+
+      resolveContinue: (decision) => {
+        if (!continueResolver) return;
+        const r = continueResolver;
+        continueResolver = null;
+        set({ pendingContinue: null });
+        r(decision);
+      },
+
+      resetOutline: () =>
+        set({
+          outline: initialOutline,
+          pageAllocation: { ...initialPageAllocation },
+        }),
 
       resetAll: () =>
         set({
           files: [],
           outline: initialOutline,
           coverMeta: buildInitialCoverMeta(),
+          pageLimit: null,
+          pageAllocation: { ...initialPageAllocation },
         }),
     }),
     {
@@ -888,20 +1209,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         outline: state.outline,
         files: state.files.filter((f) => f.status === 'parsed'),
         coverMeta: state.coverMeta,
+        pageLimit: state.pageLimit,
+        pageAllocation: state.pageAllocation,
       }),
       // 스토어 모양 진화 시 누락 필드를 기본값으로 채워 throw 방지.
-      version: 4,
+      version: 5,
       migrate: (persistedState) => {
         const s = persistedState as {
           outline?: Partial<OutlineState>;
           files?: WorkspaceFile[];
           coverMeta?: Partial<CoverMeta>;
+          pageLimit?: number | null;
+          pageAllocation?: PageAllocationState;
         } | null;
         if (!s)
           return {
             outline: initialOutline,
             files: [],
             coverMeta: buildInitialCoverMeta(),
+            pageLimit: null,
+            pageAllocation: { ...initialPageAllocation },
           };
         const outline: OutlineState = s.outline
           ? {
@@ -918,7 +1245,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...buildInitialCoverMeta(),
           ...(s.coverMeta ?? {}),
         };
-        return { outline, files, coverMeta };
+        return {
+          outline,
+          files,
+          coverMeta,
+          pageLimit: s.pageLimit ?? null,
+          pageAllocation: s.pageAllocation ?? { ...initialPageAllocation },
+        };
       },
     },
   ),

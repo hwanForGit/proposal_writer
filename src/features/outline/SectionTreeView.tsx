@@ -100,9 +100,7 @@ export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Pro
           [{tree.sectionTitle}]
         </div>
         {tree.intentGuidance && (
-          <GuidanceBox label="이 섹션의 기획 의도">
-            {tree.intentGuidance}
-          </GuidanceBox>
+          <GuidanceBox label="이 섹션의 기획 의도" text={tree.intentGuidance} />
         )}
       </header>
 
@@ -182,9 +180,11 @@ function MidNodeCard({
         </div>
       </div>
       {mid.guidance && (
-        <GuidanceBox className="mt-2" label="포함될 자사 소스 및 벤치마킹 적용안">
-          {mid.guidance}
-        </GuidanceBox>
+        <GuidanceBox
+          className="mt-2"
+          label="포함될 자사 소스 및 벤치마킹 적용안"
+          text={mid.guidance}
+        />
       )}
       {mid.subNodes.length > 0 && (
         <div className="mt-3 space-y-2 border-l-2 border-blue-100 pl-3">
@@ -233,9 +233,8 @@ function SubNodeCard({ sub, onUpdateTitle, onRemove }: SubCardProps) {
           className="mt-1.5"
           compact
           label="포함될 자사 소스 및 벤치마킹 적용안"
-        >
-          {sub.guidance}
-        </GuidanceBox>
+          text={sub.guidance}
+        />
       )}
     </div>
   );
@@ -305,12 +304,26 @@ function InlineTitle({ value, onChange, className }: InlineTitleProps) {
 
 interface GuidanceProps {
   label: string;
-  children: React.ReactNode;
+  text: string;
   compact?: boolean;
   className?: string;
 }
 
-function GuidanceBox({ label, children, compact, className }: GuidanceProps) {
+// "1) ... 2) ..." / "1. ... 2. ..." 형태(개조식)면 항목별로 분리. 아니면 null.
+// 파서가 줄바꿈을 공백으로 합치므로, 번호 마커 직전에서 분리해 복원한다.
+function splitItemized(text: string): string[] | null {
+  const s = text.trim();
+  if (!/\d+[.)]\s/.test(s)) return null;
+  const parts = s
+    .split(/\s*(?=\d+[.)]\s)/)
+    .map((p) => p.replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+  return parts.length >= 2 ? parts : null;
+}
+
+function GuidanceBox({ label, text, compact, className }: GuidanceProps) {
+  const items = splitItemized(text);
+  const textSize = compact ? 'text-[12px]' : 'text-[13px]';
   return (
     <div
       className={`flex gap-2 rounded-md border-l-[3px] border-amber-300 bg-amber-50/60 ${
@@ -327,13 +340,19 @@ function GuidanceBox({ label, children, compact, className }: GuidanceProps) {
         <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
           작성 가이드 · {label}
         </span>
-        <p
-          className={`mt-0.5 italic leading-relaxed text-gray-700 ${
-            compact ? 'text-[12px]' : 'text-[13px]'
-          }`}
-        >
-          {children}
-        </p>
+        {items ? (
+          <ol
+            className={`mt-0.5 list-decimal space-y-0.5 pl-4 leading-relaxed text-gray-700 ${textSize}`}
+          >
+            {items.map((it, i) => (
+              <li key={i}>{it}</li>
+            ))}
+          </ol>
+        ) : (
+          <p className={`mt-0.5 italic leading-relaxed text-gray-700 ${textSize}`}>
+            {text}
+          </p>
+        )}
       </div>
     </div>
   );

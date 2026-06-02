@@ -166,6 +166,38 @@ export async function generateStep2Section(input: {
   return api.post<Step2SectionResponse>('/api/outline/step2/section', input);
 }
 
+export interface PageAllocationInputItem {
+  key: string;
+  mainTitle: string;
+  midTitle: string;
+  midGuidance?: string;
+}
+
+export interface PageAllocationResult {
+  key: string;
+  pages: number;
+  weight: number;
+  reason: string;
+}
+
+export interface PageAllocationResponse {
+  allocations: PageAllocationResult[];
+  pageLimit: number;
+  modelId: string;
+  generatedAt: string;
+  usage: OutlineUsage | null;
+  elapsedMs: number;
+}
+
+export async function generatePageAllocation(input: {
+  step1Markdown: string;
+  companyPresent: boolean;
+  pageLimit: number;
+  items: PageAllocationInputItem[];
+}): Promise<PageAllocationResponse> {
+  return api.post<PageAllocationResponse>('/api/outline/page-allocation', input);
+}
+
 export interface BodySectionResponse {
   markdown: string;
   modelId: string;

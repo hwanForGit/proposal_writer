@@ -433,6 +433,182 @@ outlineRouter.post('/outline/step2/section', async (req, res, next) => {
 });
 
 // ────────────────────────────────────────────────────────────────────
+// /api/outline/page-allocation — 중분류별 페이지 배분
+// 전체 아웃라인(중분류 목록) + 목표 페이지 수를 받아, 중요도·강점 기반 가중치를
+// LLM에서 받고, 서버에서 가중치를 페이지(0.5단위)로 정규화하여 합이 목표와 일치하게 한다.
+// ────────────────────────────────────────────────────────────────────
+interface AllocInputItem {
+  key: string;
+  mainTitle: string;
+  midTitle: string;
+  midGuidance?: string;
+}
+
+interface PageAllocBody {
+  step1Markdown: string;
+  companyPresent: boolean;
+  pageLimit: number;
+  items: AllocInputItem[];
+}
+
+const isAllocItem = (v: unknown): v is AllocInputItem =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as AllocInputItem).key === 'string' &&
+  typeof (v as AllocInputItem).mainTitle === 'string' &&
+  typeof (v as AllocInputItem).midTitle === 'string';
+
+const isPageAllocBody = (v: unknown): v is PageAllocBody =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as PageAllocBody).step1Markdown === 'string' &&
+  typeof (v as PageAllocBody).companyPresent === 'boolean' &&
+  typeof (v as PageAllocBody).pageLimit === 'number' &&
+  Array.isArray((v as PageAllocBody).items) &&
+  (v as PageAllocBody).items.every(isAllocItem);
+
+// LLM 응답에서 [{"n":..,"weight":..,"reason":".."}] JSON 배열만 추출/파싱 (방어적)
+const parseWeightArray = (
+  raw: string,
+): { n: number; weight: number; reason: string }[] => {
+  const m = raw.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  try {
+    const arr: unknown = JSON.parse(m[0]);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null)
+      .map((e) => ({
+        n: Number(e.n),
+        weight: Number(e.weight),
+        reason: typeof e.reason === 'string' ? e.reason : '',
+      }))
+      .filter((e) => Number.isFinite(e.n));
+  } catch {
+    return [];
+  }
+};
+
+// 가중치 배열 → 페이지(0.5단위) 배열. 각 항목 최소 0.5p, 합은 정확히 totalPages(0.5 반올림).
+// 최대잔여(largest remainder)법으로 정확히 합을 맞춘다.
+const allocatePages = (weights: number[], totalPages: number): number[] => {
+  const n = weights.length;
+  if (n === 0) return [];
+  const step = 0.5;
+  const totalUnits = Math.max(n, Math.round(totalPages / step)); // 항목당 최소 1 unit(0.5p)
+  const w = weights.map((x) => (Number.isFinite(x) && x > 0 ? x : 1));
+  const sumW = w.reduce((a, b) => a + b, 0) || n;
+  const extra = totalUnits - n;
+  const raw = w.map((x) => (extra * x) / sumW);
+  const floor = raw.map((r) => Math.floor(r));
+  let rem = extra - floor.reduce((a, b) => a + b, 0);
+  const order = raw
+    .map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => b.frac - a.frac);
+  const bonus = new Array<number>(n).fill(0);
+  for (let k = 0; k < order.length && rem > 0; k++) {
+    bonus[order[k]!.i] = 1;
+    rem--;
+  }
+  return w.map((_, i) => (1 + floor[i]! + bonus[i]!) * step);
+};
+
+outlineRouter.post('/outline/page-allocation', async (req, res, next) => {
+  if (!isPageAllocBody(req.body)) {
+    return next(
+      new ApiError(
+        400,
+        'INVALID_BODY',
+        'step1Markdown, companyPresent, pageLimit, items가 필요합니다',
+      ),
+    );
+  }
+  const { step1Markdown, companyPresent, items } = req.body;
+  const pageLimit = Math.min(300, Math.max(1, Math.round(req.body.pageLimit)));
+  if (items.length === 0) {
+    return next(new ApiError(400, 'NO_ITEMS', '배분할 중분류가 없습니다'));
+  }
+
+  try {
+    const midList = items
+      .map((it, i) => {
+        const g = (it.midGuidance ?? '').trim();
+        return `${i + 1}. [${it.mainTitle}] > ${it.midTitle}${
+          g ? ` — ${g.slice(0, 80)}` : ''
+        }`;
+      })
+      .join('\n');
+    const companyNote = companyPresent
+      ? '회사 자료가 제공됨 — 자사 강점·실적이 드러나는 영역에 가중하십시오.'
+      : '회사 자료 미제공 — 공고/양식의 평가 항목 중요도를 중심으로 판단하십시오.';
+
+    const systemPrompt = await loadAndRenderPrompt('page_allocation', {
+      step1_markdown: step1Markdown || '(사전 분석 결과 없음)',
+      company_note: companyNote,
+      page_limit: String(pageLimit),
+      mid_list: midList,
+    });
+    const { client, model } = getLlmClient();
+
+    console.log(
+      `[page allocation] items=${items.length} pageLimit=${pageLimit} prompt=${systemPrompt.length}자 model=${model}`,
+    );
+
+    const startedAt = Date.now();
+    const completion = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content:
+            '위 중분류 전부에 대해 [출력 형식]대로 JSON 배열만 출력하십시오. 설명·코드펜스 금지.',
+        },
+      ],
+      max_tokens: 2500,
+    });
+
+    const choice = completion.choices[0];
+    const rawContent = choice?.message?.content ?? '';
+    const parsed = parseWeightArray(rawContent);
+    const byN = new Map(parsed.map((p) => [p.n, p]));
+    const weights = items.map((_, i) => byN.get(i + 1)?.weight ?? 5);
+    const pages = allocatePages(weights, pageLimit);
+
+    const allocations = items.map((it, i) => ({
+      key: it.key,
+      pages: pages[i]!,
+      weight: weights[i]!,
+      reason: byN.get(i + 1)?.reason ?? '',
+    }));
+
+    console.log(
+      `[page allocation] done in ${Date.now() - startedAt}ms, parsed=${parsed.length}/${items.length}, sum=${pages.reduce((a, b) => a + b, 0)}p (target ${pageLimit})`,
+    );
+
+    res.json({
+      allocations,
+      pageLimit,
+      modelId: completion.model,
+      generatedAt: new Date().toISOString(),
+      usage: completion.usage ?? null,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    if (err instanceof ApiError) return next(err);
+    const status =
+      typeof (err as { status?: number })?.status === 'number'
+        ? (err as { status: number }).status
+        : 502;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[page allocation]', status, message);
+    return next(
+      new ApiError(status, 'LLM_REQUEST_FAILED', message, { cause: String(err) }),
+    );
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
 // /api/outline/generate — 레거시 (한 번에 전체). 큰 입력에서는 502 가능.
 // split 흐름으로 대체 중이지만 호환을 위해 유지.
 // ────────────────────────────────────────────────────────────────────

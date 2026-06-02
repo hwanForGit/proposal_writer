@@ -32,6 +32,22 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
    - 파일명 suffix: `-outline`, `-titles`, 또는 무.
 3. **Tailscale/mDNS 호스트명 허용** — `vite.config.ts`에 `server.allowedHosts: ['hsh', '.ts.net', '.local']`. `http://hsh:5173` (Tailscale MagicDNS), `*.ts.net` (FQDN), `*.local` (Bonjour) 다 통과.
 
+### 2026-06-02 추가 작업 (2차 세션, commit 됨)
+1. **자동 진행 기능** — 헤더에 `🚀 한 번에 끝까지 작성`(`runAll('step3')`)과 `📑 아웃라인까지 자동`(`runAll('step2')`). Step1→2(대분류 순회)→3(본문 순회)을 현재 위치에서 끝까지 자동.
+   - `store.runAll(stopAfter)`: 오케스트레이터. `generateCurrentSection(i)`/`generateCurrentBody(i)`/`continueCurrentBody(i)`에 **명시적 인덱스** 추가해 화면 커서와 분리.
+   - **진행 중 이동 안전** — `autoFollowView` 플래그: 기본은 화면이 생성 위치 따라가되, 사용자가 뱃지/스텝퍼로 직접 이동하면 false→머무름, 생성은 백그라운드 계속. (생성 순서가 화면 커서에 의존하지 않음)
+   - **이어쓰기 인앱 모달** — 본문이 분량 한도(`isTruncated`=`length`||`max_tokens`)로 끊기면 pause→예/아니오 모달(`pendingContinue`/`resolveContinue`). `window.confirm`은 비동기 컨텍스트에서 브라우저가 무시(취소처리)해서 인앱 모달로 교체함.
+2. **DOCX 버그픽스 2건** (`server/src/exporters/docx.ts`)
+   - `---` 구분선이 pandoc에서 YAML 메타블록으로 오인돼 크래시 → 입력 포맷에 `markdown-yaml_metadata_block`.
+   - **표 한글 세로 붕괴**(글자마다 줄바꿈) → LLM의 불균등 대시(`|:--|:------|`)를 pandoc이 1글자 폭 고정. 해결: `normalizeTableSeparators`(대시 균등화) + `--columns=1`(모든 표를 고정폭 pct5000으로). autofit(`tblW=auto`)은 CJK 최소폭=1글자라 오히려 붕괴 → 금지.
+3. **페이지 배분 (M-A/M-B 완료, M-C 미구현)** — 사용자가 목표 총 페이지 입력 → 중요도·강점 기반 중분류별 페이지 배분.
+   - `store.pageLimit` + `pageAllocation` (persist v5). `generatePageAllocation()`.
+   - 서버 `POST /api/outline/page-allocation` + `prompts/page_allocation.md`: LLM이 가중치(1~10)+근거 JSON 출력 → 서버가 **최대잔여법으로 0.5단위 페이지, 합=목표** 정규화.
+   - Step 2 화면 `📐 페이지 배분` 패널 + 트리에 중분류 `≈Np`·대분류 `합계 ≈Mp` 뱃지. 키=`${mainIndex}-${midIndex}`(body 좌표계와 동일).
+   - **M-C(다음 할 일)**: 이 배정 장수를 본문 생성에 연결 — 목표자수=페이지×~1,800, 호출당 ~2p로 분할, 목표까지 자동 이어쓰기(`runAll` 연동, 504 회피).
+4. **작성 전략·가이드 개조식화** — `outline_step1.md`/`outline_step2_section.md` Output Format을 번호 개조식(`1) … 2) …`)으로. `SectionTreeView.GuidanceBox`에 `splitItemized` 추가(파서가 합친 문자열을 번호 목록으로 분리 렌더). 기존 산문 가이드는 하위호환(문단 표시).
+5. **본문 분량** — 늘렸다가 504 빈발로 **원복**(`BODY_MAX_TOKENS=5000`, 본문 2,500~3,500자). 504는 **게이트웨이 upstream 타임아웃(Envoy, 인프라 소관)** 이라 앱에서 못 늘림 — 우리 측 fetch/SDK 타임아웃은 더 길어 무관. 길이 원하면 빠른 모델(haiku/flash) 또는 이어쓰기 분할.
+
 ### 보류 중
 - **M9** (드래그 정렬, `@dnd-kit`) — 명시 요청 없으면 보류
 - **HWPX 자동 변환** — Phase 3 out-of-scope. 사용자가 한컴 한글에서 DOCX 열어 다른 이름으로 저장 (안내는 ExportDialog 성공 박스 + README에)
@@ -43,7 +59,8 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
   - 5173 포트에 옛 vite 좀비 프로세스가 떠 있을 수 있음 — 새 PC에서는 무관.
 
 ### 미해결/검토 사항
-- M26 검증 샘플(13개 마크다운 요소) **외형 검증을 사용자가 실제로 수행했는지** — 깨진 행 발견 시 `server/src/exporters/pdf.ts`의 CSS 또는 `docx.ts`의 pandoc 인자 조정 (2026-06-01에 시작했다가 사용자 요청으로 스톱)
+- M26 검증 샘플(13개 마크다운 요소) — **표 한글 세로 붕괴는 2차 세션에서 수정 완료**. 남은 DOCX 외형 차이(화면 대비): ① 표 격자선(현재 헤더 밑줄만) ② 코드 회색 배경 ③ 인용문 좌측선 ④ 한글 기본 폰트(맑은 고딕). → pandoc **reference 문서**(`--reference-doc`)로 한 번에 교정 가능, 아직 미착수.
+- **웹 검색 미연동** — Step1 "온라인 우수 사례"·페이지 배분 모두 실시간 검색 아님(모델 학습 지식 기반). 라이브 검색은 별도 큰 작업.
 - Phase 4 (사내 배포) — 사용자가 의향 표시. 결정 사항: 인프라(k8s vs VM vs IP 공유), 인증(SSO/IP/토큰), 데이터 저장소(localStorage 유지 vs DB), 도메인+HTTPS, Docker 이미지
 
 ---
