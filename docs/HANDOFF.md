@@ -16,19 +16,34 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
 
 ---
 
-## 현재 진행 상태 (2026-06-01)
+## 현재 진행 상태 (2026-06-02)
 
 ### 완료된 마일스톤
 - **Phase 1** (M1~M8, M10, M11) — 파일 업로드·LLM 연동·트리 편집기·localStorage·UX
 - **Phase 2** (Step 3 본문) — 중분류 단위 본문 작성, 이어쓰기, 편집
 - **Phase 3** (M23~M27) — 통합 마크다운, DOCX/PDF 다운로드, 서식 검증 샘플, "한컴 HWPX 저장" 안내
 
+### 2026-06-02 추가 작업 (commit 됨)
+1. **Step 2 첫 대분류 파서 보정** — 사용자 보고: "1. 제안개요"가 빈 `[]`로 표시되고 트리에 `##`/`###` 마커가 노출되는 이슈. LLM이 첫 호출에서 가끔 `[1. 제안개요]` 헤더를 비우거나 `[중분류 X.Y]` 대신 마크다운 헤딩(`## 1.1 ...`)을 출력하는 경우 대비.
+   - `src/features/outline/sectionTree.ts`: `stripFormat`이 leading `#+` 제거, `parseSection(md, fallbackTitle?)`로 빈 sectionTitle을 외부 title로 채움, H2/H3 헤딩 fallback 인식 (H2 = 첫 occurence면 sectionTitle, 이후는 mid / H3+ = 직전 mid의 sub)
+   - 호출자 4곳에서 `section.title`을 fallback으로 전달 (OutlinePanel, SectionTreeView, OutlineCompactTree, workspace/store의 `proceedToStep3`)
+2. **다운로드 스코프 3-way 확장** — ExportDialog `includeBody: boolean` → `scope: 'full' | 'outline-with-guide' | 'titles-only'`.
+   - `titles-only` = 제목 트리만 (가이드·본문 제외, 회람용). 마커 정리: `[중분류 1.1] 사업 배경` → `1.1 사업 배경`.
+   - 파일명 suffix: `-outline`, `-titles`, 또는 무.
+3. **Tailscale/mDNS 호스트명 허용** — `vite.config.ts`에 `server.allowedHosts: ['hsh', '.ts.net', '.local']`. `http://hsh:5173` (Tailscale MagicDNS), `*.ts.net` (FQDN), `*.local` (Bonjour) 다 통과.
+
 ### 보류 중
 - **M9** (드래그 정렬, `@dnd-kit`) — 명시 요청 없으면 보류
 - **HWPX 자동 변환** — Phase 3 out-of-scope. 사용자가 한컴 한글에서 DOCX 열어 다른 이름으로 저장 (안내는 ExportDialog 성공 박스 + README에)
 
+### 진행 중 이슈 (다른 PC에서 이어 진단 필요)
+- **hsh:5174 파일 첨부 실패** — Tailscale 통해 `http://hsh:5174`로 접속은 되는데 (사용자 PC + 외부 PC 모두), 파일 첨부 단계에서 실패. `http://localhost:5174`에서는 정상.
+  - 다음 진단 단계: 브라우저 F12 → Console / Network 탭에서 `/api/files/parse` 요청의 status·응답 본문 확인. drag&drop이냐 파일 선택이냐 등 증상 명확화.
+  - 가설 1: vite proxy의 multipart forwarding이 호스트명 기반 접근에서 깨지는 케이스. 가설 2: secure context 관련(File System Access API 등). 가설 3: 서버 CORS Origin 검사 (현재 `cors({ origin: 'http://localhost:5173' })`만 허용).
+  - 5173 포트에 옛 vite 좀비 프로세스가 떠 있을 수 있음 — 새 PC에서는 무관.
+
 ### 미해결/검토 사항
-- M26 검증 샘플(13개 마크다운 요소) **외형 검증을 사용자가 실제로 수행했는지** — 깨진 행 발견 시 `server/src/exporters/pdf.ts`의 CSS 또는 `docx.ts`의 pandoc 인자 조정
+- M26 검증 샘플(13개 마크다운 요소) **외형 검증을 사용자가 실제로 수행했는지** — 깨진 행 발견 시 `server/src/exporters/pdf.ts`의 CSS 또는 `docx.ts`의 pandoc 인자 조정 (2026-06-01에 시작했다가 사용자 요청으로 스톱)
 - Phase 4 (사내 배포) — 사용자가 의향 표시. 결정 사항: 인프라(k8s vs VM vs IP 공유), 인증(SSO/IP/토큰), 데이터 저장소(localStorage 유지 vs DB), 도메인+HTTPS, Docker 이미지
 
 ---
