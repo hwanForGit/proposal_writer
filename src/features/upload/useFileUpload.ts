@@ -1,6 +1,7 @@
 import { useWorkspaceStore } from '@/features/workspace/store';
 import type { FileCategory } from '@/features/workspace/types';
 import { ApiError, parseFiles } from '@/lib/api';
+import { genId } from '@/lib/id';
 
 const normalizeName = (s: string): string => s.normalize('NFC');
 
@@ -13,7 +14,7 @@ export function useFileUpload() {
     if (files.length === 0) return;
 
     const items = files.map((f) => ({
-      id: crypto.randomUUID(),
+      id: genId('file'),
       name: f.name,
       normalizedName: normalizeName(f.name),
       size: f.size,

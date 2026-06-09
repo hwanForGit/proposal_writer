@@ -255,6 +255,7 @@ export async function generateBodySection(input: {
   midGuidance: string;
   step2SectionMarkdown: string;
   previousMarkdown?: string;
+  targetChars?: number;
 }): Promise<BodySectionResponse> {
   return api.post<BodySectionResponse>('/api/body/section', input);
 }

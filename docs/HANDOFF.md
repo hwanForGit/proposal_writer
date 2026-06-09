@@ -48,15 +48,23 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
 4. **작성 전략·가이드 개조식화** — `outline_step1.md`/`outline_step2_section.md` Output Format을 번호 개조식(`1) … 2) …`)으로. `SectionTreeView.GuidanceBox`에 `splitItemized` 추가(파서가 합친 문자열을 번호 목록으로 분리 렌더). 기존 산문 가이드는 하위호환(문단 표시).
 5. **본문 분량** — 늘렸다가 504 빈발로 **원복**(`BODY_MAX_TOKENS=5000`, 본문 2,500~3,500자). 504는 **게이트웨이 upstream 타임아웃(Envoy, 인프라 소관)** 이라 앱에서 못 늘림 — 우리 측 fetch/SDK 타임아웃은 더 길어 무관. 길이 원하면 빠른 모델(haiku/flash) 또는 이어쓰기 분할.
 
+### 2026-06-04 추가 작업 (3차 세션, commit 됨)
+1. **M-C: 페이지 배분 → 본문 생성 연결** — 배정 장수만큼 본문 자동 분할 생성.
+   - `store`: `CHARS_PER_PAGE=1800`, `targetCharsForBody(body, items)`(키 `${mainIndex}-${midIndex}`). `generateCurrentBody`가 목표 있으면 초기 생성 후 **목표의 85%까지 이어쓰기 자동 반복**(호출당 ~2,200자, 증가<200자/maxChunks/autoRunStop로 중단). `continueCurrentBody`도 목표 전달.
+   - `body.ts`: `targetChars` 수신 → 호출별 분량 지시(초기 ≤~3,200자, 이어쓰기 ≤~2,200자)로 504 회피. `runAll`은 목표 있는 본문엔 이어쓰기 모달 생략.
+   - UI: Step2 대분류 진행 뱃지 `≈Np`(합계)·Step3 본문 뱃지 `≈Np`·본문 정보바 `목표 ≈Np`, 배분 중 로딩 스피너.
+2. **파일 첨부 실패(비-secure context) 해결** — `crypto.randomUUID()`는 secure context 전용이라 `http://hsh`·`http://<ip>` 등 비-HTTPS에서 throw → 첨부 실패였음. `src/lib/id.ts`의 `genId()`(폴백 포함)로 교체(`useFileUpload`, `sectionTree`). **localhost만 secure context라 그동안 로컬에선 됐던 것.**
+3. **접속/포트 정리** — `vite.config`에 `strictPort:true`(포트 점유 시 조용히 5174로 안 밀림) + `allowedHosts`에 `lattes-macbook` 추가. dev:all 좀비가 여러 개 떠 5173/5174 충돌하던 것 정리.
+   - **중요: `hsh`는 옛 머신 이름.** 현재 개발 머신 = **`lattes-macbook`** (Tailscale IP **100.80.201.4**). 외부/모바일 접속 주소: `http://100.80.201.4:5173`(가장 확실) 또는 `http://lattes-macbook.<tailnet>.ts.net:5173`. 짧은 이름 `lattes-macbook:5173`은 allowedHosts 반영 위해 dev:all 재시작 후.
+4. **HWP 미지원 정리** — `.hwp` 제대로 안 돼서 `ACCEPTED_EXTENSIONS`와 서버 `.hwp` 분기/안내문구 제거. HWPX는 지원 유지.
+
 ### 보류 중
 - **M9** (드래그 정렬, `@dnd-kit`) — 명시 요청 없으면 보류
 - **HWPX 자동 변환** — Phase 3 out-of-scope. 사용자가 한컴 한글에서 DOCX 열어 다른 이름으로 저장 (안내는 ExportDialog 성공 박스 + README에)
 
-### 진행 중 이슈 (다른 PC에서 이어 진단 필요)
-- **hsh:5174 파일 첨부 실패** — Tailscale 통해 `http://hsh:5174`로 접속은 되는데 (사용자 PC + 외부 PC 모두), 파일 첨부 단계에서 실패. `http://localhost:5174`에서는 정상.
-  - 다음 진단 단계: 브라우저 F12 → Console / Network 탭에서 `/api/files/parse` 요청의 status·응답 본문 확인. drag&drop이냐 파일 선택이냐 등 증상 명확화.
-  - 가설 1: vite proxy의 multipart forwarding이 호스트명 기반 접근에서 깨지는 케이스. 가설 2: secure context 관련(File System Access API 등). 가설 3: 서버 CORS Origin 검사 (현재 `cors({ origin: 'http://localhost:5173' })`만 허용).
-  - 5173 포트에 옛 vite 좀비 프로세스가 떠 있을 수 있음 — 새 PC에서는 무관.
+### 진행 중 이슈
+- **(해결됨) 비-secure context 파일 첨부 실패** — 3차 세션에서 원인 규명·수정 완료. 원인은 `crypto.randomUUID()`(secure context 전용)였고 `genId()`로 교체. 가설 중 "secure context"가 정답이었음(vite proxy/CORS 아님 — 프록시 경유 same-origin이라 무관).
+- **(참고) 프록시 맨 500 = 백엔드 재시작** — 편집 중 `tsx watch`가 백엔드를 재시작하면 진행 중 요청이 끊겨 vite 프록시가 비-JSON 500(`UNKNOWN_ERROR`/`Internal Server Error`)을 반환. 게이트웨이 정상 여부는 `POST /api/llm/ping`으로 즉시 확인 가능. 일시적이므로 재시도하면 됨.
 
 ### 미해결/검토 사항
 - M26 검증 샘플(13개 마크다운 요소) — **표 한글 세로 붕괴는 2차 세션에서 수정 완료**. 남은 DOCX 외형 차이(화면 대비): ① 표 격자선(현재 헤더 밑줄만) ② 코드 회색 배경 ③ 인용문 좌측선 ④ 한글 기본 폰트(맑은 고딕). → pandoc **reference 문서**(`--reference-doc`)로 한 번에 교정 가능, 아직 미착수.

@@ -26,14 +26,6 @@ export async function parseFile(
   if (OFFICE_EXTS.has(ext)) return parseOffice(buffer, fileName);
   if (ext === '.hwpx') return parseHwpx(buffer, fileName);
   if (TEXT_EXTS.has(ext)) return parseText(buffer, fileName);
-  if (ext === '.hwp') {
-    throw new ApiError(
-      415,
-      'UNSUPPORTED_HWP',
-      'HWP(구버전 한글 바이너리)는 Phase 1에서 지원하지 않습니다. HWPX로 변환 후 업로드해주세요.',
-      { fileName },
-    );
-  }
   throw new ApiError(
     415,
     'UNSUPPORTED_FORMAT',

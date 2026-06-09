@@ -1,3 +1,5 @@
+import { genId } from '@/lib/id';
+
 export interface SubNode {
   id: string;
   title: string;
@@ -52,10 +54,7 @@ const appendLine = (existing: string, line: string): string => {
   return existing ? `${existing} ${clean}` : clean;
 };
 
-const newId = (): string =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `n-${Math.random().toString(36).slice(2, 10)}`;
+const newId = (): string => genId('n');
 
 export function parseSection(markdown: string, fallbackTitle?: string): SectionTree {
   const lines = markdown.split('\n');

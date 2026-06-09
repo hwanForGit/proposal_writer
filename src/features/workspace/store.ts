@@ -169,6 +169,19 @@ const initialPageAllocation: PageAllocationState = {
   error: null,
 };
 
+// 1페이지 ≈ 한국어 본문 글자 수(A4, 맑은 고딕 10~11pt, 줄간격 160% 기준 근사).
+export const CHARS_PER_PAGE = 1800;
+
+// 해당 본문(중분류)에 배정된 목표 글자 수. 배분이 없으면 null(기존 단일 호출 흐름).
+const targetCharsForBody = (
+  body: BodyState,
+  items: AllocationItem[],
+): number | null => {
+  const key = `${body.ref.mainIndex}-${body.ref.midIndex}`;
+  const a = items.find((it) => it.key === key);
+  return a && a.pages > 0 ? Math.round(a.pages * CHARS_PER_PAGE) : null;
+};
+
 interface WorkspaceState {
   files: WorkspaceFile[];
   outline: OutlineState;
@@ -666,6 +679,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       (s) => s.index === body.ref.mainIndex,
     );
     const step2SectionMarkdown = step2Section?.markdown ?? '';
+    // 페이지 배분이 있으면 이 중분류의 목표 글자 수
+    const target = targetCharsForBody(body, get().pageAllocation.items);
 
     // mark generating
     set((state) => ({
@@ -690,6 +705,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       midTitle: body.ref.midTitle,
       midGuidance: body.ref.midGuidance,
       step2SectionMarkdown,
+      targetChars: target ?? undefined,
     };
 
     // 504/502/503/0 류는 1회 자동 재시도 (5초 대기)
@@ -753,6 +769,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         },
       }));
     }
+
+    // ── 목표 페이지 분량까지 자동 이어쓰기 ──
+    // 배정 목표가 있으면 초기 호출만으로 부족한 경우 목표의 ~85%에 도달할 때까지
+    // 이어쓰기를 자동 반복(호출당 ~2,200자로 504 회피). 더 안 늘면 마무리로 보고 중단.
+    if (res && target) {
+      const maxChunks = Math.ceil(target / 2000) + 2; // 안전장치
+      for (let c = 0; c < maxChunks; c++) {
+        if (get().autoRunStop) break;
+        const b = get().outline.step3.bodies[i];
+        if (!b || b.status !== 'ready' || !b.markdown) break;
+        const before = b.markdown.length;
+        if (before >= target * 0.85) break; // 목표 도달
+        await get().continueCurrentBody(i);
+        const b2 = get().outline.step3.bodies[i];
+        if (!b2 || b2.status === 'error') break;
+        const after = b2.markdown?.length ?? before;
+        if (after - before < 200) break; // 증가량 미미 → 모델이 마무리한 것으로 간주
+      }
+    }
   },
 
   retryCurrentBody: async () => {
@@ -784,6 +819,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
     }));
 
+    const target = targetCharsForBody(body, get().pageAllocation.items);
     const inputs = buildLlmInputs(files);
     const callArgs = {
       ...inputs,
@@ -793,6 +829,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       midGuidance: body.ref.midGuidance,
       step2SectionMarkdown,
       previousMarkdown: body.markdown,
+      targetChars: target ?? undefined,
     };
 
     const isTransient = (err: unknown): boolean => {
@@ -1125,6 +1162,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!body) break;
               if (body.status === 'error') return;
 
+              // 페이지 배분이 있는 본문은 generateCurrentBody가 목표까지 자동
+              // 이어쓰기하므로 모달이 불필요. 배분이 없을 때만 잘림 모달로 확인.
+              const hasTarget =
+                targetCharsForBody(body, get().pageAllocation.items) != null;
+
               const willAct =
                 body.status !== 'ready' || isTruncated(body.finishReason);
               if (willAct) followBody(i);
@@ -1138,7 +1180,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               // 분량 한도로 끊긴 경우 이어쓸지 인앱 모달로 확인
               // (이어쓴 결과가 또 끊기면 반복). window.confirm은 비동기 컨텍스트에서
               // 브라우저가 무시(취소 처리)할 수 있어 store 상태 기반 모달로 처리한다.
-              while (isTruncated(body.finishReason)) {
+              while (!hasTarget && isTruncated(body.finishReason)) {
                 if (stopped()) return;
                 const targetTitle = body.ref.midTitle;
                 followBody(i);

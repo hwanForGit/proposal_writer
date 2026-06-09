@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { isTruncated, useWorkspaceStore } from '@/features/workspace/store';
+import {
+  CHARS_PER_PAGE,
+  isTruncated,
+  useWorkspaceStore,
+} from '@/features/workspace/store';
 import type {
   BodyState,
   OutlineStepState,
@@ -247,6 +251,7 @@ export default function OutlinePanel() {
             onContinueBody={continueCurrentBody}
             onSaveBody={(md) => setBodyMarkdown(step3.currentBodyIndex, md)}
             onJumpBody={setCurrentBodyIndex}
+            pageByKey={pageByKey}
           />
         )}
       </div>
@@ -819,6 +824,17 @@ function Step2View({
     );
   }
 
+  // 대분류별 페이지 합계 (배분 결과가 있을 때)
+  const sectionPageTotals = new Map<number, number>();
+  if (pageAllocation.status === 'ready') {
+    for (const it of pageAllocation.items) {
+      sectionPageTotals.set(
+        it.mainIndex,
+        (sectionPageTotals.get(it.mainIndex) ?? 0) + it.pages,
+      );
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Step 1 결과 접힘 */}
@@ -844,6 +860,7 @@ function Step2View({
               key={s.index}
               section={s}
               isCurrent={idx === step2.currentSectionIndex}
+              pages={sectionPageTotals.get(s.index)}
               onClick={
                 s.status !== 'pending' && onJumpSection
                   ? () => onJumpSection(idx)
@@ -934,13 +951,25 @@ function AllocationPanel({
               : '중요도·강점 기반으로 중분류별 페이지를 배분합니다.'
           }
         >
-          {generating
-            ? '배분 계산 중…'
-            : pageAllocation.status === 'ready'
-              ? '다시 배분'
-              : '페이지 배분'}
+          {generating ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block size-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              배분 계산 중…
+            </span>
+          ) : pageAllocation.status === 'ready' ? (
+            '다시 배분'
+          ) : (
+            '페이지 배분'
+          )}
         </button>
       </div>
+
+      {generating && (
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-indigo-700">
+          <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600" />
+          중요도·강점을 분석해 중분류별 페이지를 배분하는 중… (보통 10~30초)
+        </div>
+      )}
 
       {!allReady && (
         <p className="mt-1.5 text-[11px] text-indigo-700/80">
@@ -969,10 +998,12 @@ function AllocationPanel({
 function SectionBadge({
   section,
   isCurrent,
+  pages,
   onClick,
 }: {
   section: SectionState;
   isCurrent: boolean;
+  pages?: number;
   onClick?: () => void;
 }) {
   const style =
@@ -985,28 +1016,32 @@ function SectionBadge({
           : 'bg-gray-100 text-gray-600 border-gray-200';
   const cursor = onClick ? 'cursor-pointer hover:brightness-95' : '';
   const label = `${section.index}. ${section.title.length > 15 ? section.title.slice(0, 15) + '…' : section.title}`;
+  const pageTag =
+    pages != null && pages > 0 ? (
+      <span className="ml-1 font-semibold text-indigo-700">
+        ≈{fmtPages(pages)}p
+      </span>
+    ) : null;
+  const cls = `rounded border px-2 py-0.5 text-[10px] ${style} ${
+    isCurrent ? 'ring-2 ring-blue-400' : ''
+  }`;
   if (onClick) {
     return (
       <button
         type="button"
         onClick={onClick}
-        className={`rounded border px-2 py-0.5 text-[10px] ${style} ${cursor} ${
-          isCurrent ? 'ring-2 ring-blue-400' : ''
-        }`}
+        className={`${cls} ${cursor}`}
         title={`대분류 ${section.index}: ${section.title} (클릭하여 이동)`}
       >
         {label}
+        {pageTag}
       </button>
     );
   }
   return (
-    <span
-      className={`rounded border px-2 py-0.5 text-[10px] ${style} ${
-        isCurrent ? 'ring-2 ring-blue-400' : ''
-      }`}
-      title={`대분류 ${section.index}: ${section.title}`}
-    >
+    <span className={cls} title={`대분류 ${section.index}: ${section.title}`}>
       {label}
+      {pageTag}
     </span>
   );
 }
@@ -1161,6 +1196,7 @@ interface Step3ViewProps {
   onContinueBody?: () => void;
   onSaveBody?: (next: string) => void;
   onJumpBody?: (index: number) => void;
+  pageByKey: Map<string, number>;
 }
 
 function Step3View({
@@ -1169,6 +1205,7 @@ function Step3View({
   onContinueBody,
   onSaveBody,
   onJumpBody,
+  pageByKey,
 }: Step3ViewProps) {
   if (step3.status === 'error' && step3.error) {
     return <ErrorView code={step3.error.code} message={step3.error.message} />;
@@ -1182,6 +1219,9 @@ function Step3View({
   }
 
   const current = step3.bodies[step3.currentBodyIndex]!;
+  const currentTargetPages = pageByKey.get(
+    `${current.ref.mainIndex}-${current.ref.midIndex}`,
+  );
 
   return (
     <div className="space-y-4">
@@ -1197,6 +1237,7 @@ function Step3View({
               key={b.id}
               body={b}
               isCurrent={idx === step3.currentBodyIndex}
+              pages={pageByKey.get(`${b.ref.mainIndex}-${b.ref.midIndex}`)}
               onClick={
                 b.status !== 'pending' && onJumpBody
                   ? () => onJumpBody(idx)
@@ -1223,6 +1264,7 @@ function Step3View({
         elapsedSec={elapsedSec}
         onContinue={onContinueBody}
         onSave={onSaveBody}
+        targetPages={currentTargetPages}
       />
     </div>
   );
@@ -1231,10 +1273,12 @@ function Step3View({
 function BodyBadge({
   body,
   isCurrent,
+  pages,
   onClick,
 }: {
   body: BodyState;
   isCurrent: boolean;
+  pages?: number;
   onClick?: () => void;
 }) {
   const style =
@@ -1249,6 +1293,12 @@ function BodyBadge({
     .replace(/^\[중분류[^\]]*\]\s*/, '')
     .slice(0, 14);
   const label = `${body.ref.mainIndex}.${body.ref.midIndex + 1} ${shortTitle}${body.ref.midTitle.length > 14 ? '…' : ''}`;
+  const pageTag =
+    pages != null && pages > 0 ? (
+      <span className="ml-1 font-semibold text-indigo-700">
+        ≈{fmtPages(pages)}p
+      </span>
+    ) : null;
   const baseClass = `rounded border px-2 py-0.5 text-[10px] ${style} ${
     isCurrent ? 'ring-2 ring-blue-400' : ''
   }`;
@@ -1261,6 +1311,7 @@ function BodyBadge({
         title={`${body.ref.mainTitle} > ${body.ref.midTitle} (클릭하여 이동)`}
       >
         {label}
+        {pageTag}
       </button>
     );
   }
@@ -1270,6 +1321,7 @@ function BodyBadge({
       title={`${body.ref.mainTitle} > ${body.ref.midTitle}`}
     >
       {label}
+      {pageTag}
     </span>
   );
 }
@@ -1279,11 +1331,13 @@ function CurrentBodyView({
   elapsedSec,
   onContinue,
   onSave,
+  targetPages,
 }: {
   body: BodyState;
   elapsedSec: number;
   onContinue?: () => void;
   onSave?: (next: string) => void;
+  targetPages?: number;
 }) {
   if (body.status === 'pending') {
     return (
@@ -1318,6 +1372,12 @@ function CurrentBodyView({
             <> · 토큰(마지막): {body.usage.total_tokens.toLocaleString()}</>
           )}
           <> · 출력 {body.markdown.length.toLocaleString()}자</>
+          {targetPages != null && targetPages > 0 && (
+            <span className="ml-1 rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-600">
+              목표 ≈{fmtPages(targetPages)}p (~
+              {Math.round(targetPages * CHARS_PER_PAGE).toLocaleString()}자)
+            </span>
+          )}
         </div>
         {isContinuing && (
           <div className="flex items-center gap-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -1328,7 +1388,7 @@ function CurrentBodyView({
             </span>
           </div>
         )}
-        {truncated && !isContinuing && (
+        {truncated && !isContinuing && targetPages == null && (
           <BodyTruncationNotice
             markdown={body.markdown}
             onContinue={onContinue}

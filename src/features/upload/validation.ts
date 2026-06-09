@@ -1,7 +1,6 @@
 export const ACCEPTED_EXTENSIONS = [
   '.pdf',
   '.docx',
-  '.hwp',
   '.hwpx',
   '.xlsx',
   '.pptx',
