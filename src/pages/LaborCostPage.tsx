@@ -84,24 +84,16 @@ export default function LaborCostPage() {
   );
 
   // 정부출연금 인건비 한도(총사업비의 N%) 사용 시 정부출연금 예산 자동 산정.
-  //   정부출연금 인건비 = max(0, 총사업비×N% − 자부담 전체(현물+현금))
+  //   정부출연금 인건비 = max(0, 총사업비×N% − 총사업비의 자부담금 전체(현물+현금))
   const govLaborAuto = govLaborPct > 0;
   useEffect(() => {
     if (!govLaborAuto) return;
     const desired = Math.max(
       0,
-      Math.round((pc.total * govLaborPct) / 100) - (sourceInKind + sourceCash),
+      Math.round((pc.total * govLaborPct) / 100) - pc.selfFund,
     );
     if (desired !== sourceGov) setSourceGov(desired);
-  }, [
-    govLaborAuto,
-    govLaborPct,
-    pc.total,
-    sourceInKind,
-    sourceCash,
-    sourceGov,
-    setSourceGov,
-  ]);
+  }, [govLaborAuto, govLaborPct, pc.total, pc.selfFund, sourceGov, setSourceGov]);
 
   const computed = useMemo(
     () => totalCost(members, salaryBasis, salaryMode),
