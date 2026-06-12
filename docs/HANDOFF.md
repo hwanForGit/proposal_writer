@@ -37,13 +37,18 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
     - **고정(잠금)된 값은 절대 안 바꾸고, 고정 안 한 값만 줄여** 출처 예산에 맞춤. 각 차원의 **입력값이 상한**, 그 이하로만 축소.
     - **잠금 단위 3개**: `Member.salaryLocked`(연봉), `Member.monthsLocked`(개월), 투입률은 기존 `mode` 고정/범위(고정=잠금). + **행 전체 잠금** `Member.locked`(연봉·개월·투입률 전부 불변, 자동계산 제외). UI는 `LockCheck` 체크박스.
     - **한 인력에서 조정 우선순위(자유 차원 중 1개만)**: 투입률(범위) → 참여개월 → 연봉총액.
-    - bucket(현물→정부→현금) ① 상한값으로 통째 FFD 배정 → ② 남는 예산은 **자유 차원이 있는 '가장 작은' 미배정 1명**을 경계로 `fitBoundary`가 최우선 자유 차원만 줄여 정확 소진. 투입률은 **정수%(올림)**, 초과분은 **음수 `costAdjust`**.
-    - **잔여 자동 채움 유지**: 위로도 출처 예산이 남으면 임의 인력(`auto:true`, 밴드 연봉·만월·정수%투입률+음수 costAdjust)을 큰 단가부터 생성해 정확 소진. 표에 `자동` 뱃지. **재계산 때 (행 잠금 안 한) auto 인력은 버리고 재생성** — 필터 `!m.auto || m.locked`. 🔒 잠그면 유지.
+    - bucket(현물→정부→현금) ① 상한값으로 통째 FFD 배정 → ② 남는 예산은 **자유 차원이 있는 '가장 작은' 미배정 1명**을 경계로 `fitBoundary`가 정확 소진.
+    - **`fitBoundary` = 투입률→참여개월→연봉 순 차례 축소(2026-06-12, 사용자 요청)** — 자유 차원을 우선순위대로 '산출 ≥ B 유지하는 최소'까지 줄임. 투입률은 정수%, 연봉은 연속이라 보통 1,000원 미만까지 맞춰짐 → **`costAdjust`(음수)는 최후·1,000원 미만 잔차만**. (연봉 자유면 costAdjust≈0; 연봉 고정 등 불가피할 때만 정수율 한계의 소액.)
+    - **잔여 자동 채움 유지**: 위로도 출처 예산이 남으면 임의 인력(`auto:true`, 밴드 연봉·만월)을 큰 단가부터 생성. 마지막 1명은 `fitBoundary` 재사용(밴드 연봉 유지·투입률↓·연봉 미세조정 → costAdjust≈0). 표에 `자동` 뱃지. **재계산 때 (행 잠금 안 한) auto 인력은 버리고 재생성** — 필터 `!m.auto || m.locked`. 🔒 잠그면 유지.
     - **🔒 행 잠금(`locked`) 인력은 자동계산이 전혀 안 건드림** — pre-pass에서 `memberCost`(costAdjust 포함)만큼 자기 출처 예산을 선차감하고 `done` 처리, `updated`에서 원본 그대로 반환(`return m`). 자유 차원 없는(전부 고정) 미배정 인력은 입력값 그대로(초과 표시), 자유 차원 있는 미배정은 산출 0(제외).
     - `assign` 값 = `{source, salary, months, rate, costAdjust}`. 자동 생성 seq는 잠금 유지된 auto 수에서 이어쓰기.
   - **전역 최소 참여개월(`minMonths`)** — 자동계산이 개월을 줄일 때의 전 인력 공통 하한(`지출 출처 예산` 헤더, 사업 기간 옆 입력).
   - **투입률 정수% 강제** — UI 투입률/최대율 입력 `Math.round`+`step=1`. 자동계산 산출 투입률도 올림 정수%.
   - persist v5→**v9** (v6 per-member minMonths 폐기 → v7 전역 minMonths → v8 잠금 필드 추가 → v9 auto 복구).
+  - **작성/사업계획서 연봉(2026-06-12)** — `Member.salary`=**작성 연봉**(입력값, base). **사업계획서 연봉**=급여총액=작성연봉+4대보험(9.5%)+퇴직충당금(8.33%), `src/features/labor/grossSalary.ts`의 `calculateGrossSalary`(원 반올림, Vitest 테스트 `grossSalary.test.ts`, `npm test`). 인력 표에 **사업계획서 연봉 컬럼**(자동, 읽기전용) 신설. store `salaryMode`('written'|'plan', 기본 plan)로 인건비 계산에 쓸 연봉 선택 — `effectiveSalary`/`unitCost`/`memberCost`/`totalCost`/`sourceSums`에 `mode` 인자 추가, autoCalculate는 `grossOf`로 base→급여총액 환산(salary 차원 보정에 grossMul 근사+실측). UI `인건비 기준` 토글 + 활성 연봉 칸 indigo 강조. persist v10→**v11**. (Vitest devDep 추가, `test` 스크립트.)
+  - **입력 지연 적용(2026-06-12)** — 숫자·금액 입력은 실시간 반영이 아니라 **Enter/blur 시 적용**. `MoneyInput`·`NumInput` 모두 로컬 draft를 들고 있다가 Enter(또는 칸 밖 클릭)에 commit(값이 실제 바뀐 경우만 → setSource* 부작용 방지), Esc는 취소. 입력 중엔 **노란 테두리(ring-amber)** + 툴팁으로 "적용 대기" 표시, 최상단에 안내 배너 상시 노출. 이름 등 텍스트 입력은 기존대로 실시간.
+  - **금액 표시 단위(2026-06-12)** — store `amountUnit`(`won`/`thousand`/`tenK`/`million`, `UNIT_META`). 최상단 버튼으로 선택. `useUnit`/`useFmtWon` 훅으로 표시(`fmtWon`)와 입력(`MoneyInput`) 모두 단위 환산(저장은 항상 원, 표시·입력은 정수 환산·내보내기도 단위 반영). persist v9→**v10**. 긴 금액 줄바꿈 방지로 표시 셀에 `whitespace-nowrap`.
+  - **사업비 총괄표 다운로드**: CSV(UTF-8 BOM)/엑셀(TSV)/Markdown, 단위 머리말 포함. 총괄표 footer에 출처별 사용 합계·총사업비(예산)·잔여(녹색/초과 빨강) 표시, 합계부 컬럼명 반복.
   - **결과 복사**: Markdown 표 / 엑셀(탭 구분).
   - 참고 문서: `docs/[별표 2]…`, `docs/별첨3…` PDF (국가연구개발사업 비목별 계상기준 — 인건비 산식 근거).
   - **미해결/다음 후보**: FFD는 여전히 휴리스틱(정수 개월·천원 내림으로 소액 잔여 가능, 전역 최적 아님). 연구수당/간접비 비목 / 참여개월 0.5단위 정밀화는 보류.

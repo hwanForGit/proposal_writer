@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { genId } from '@/lib/id';
+import {
+  calculateGrossSalary,
+  RETIREMENT_RATE,
+  EMPLOYER_INSURANCE_RATE,
+} from './grossSalary';
 
 // 투입률 모드: 고정값 / [최소~최대] 범위
 export type RateMode = 'fixed' | 'range';
@@ -8,8 +13,23 @@ export type RateMode = 'fixed' | 'range';
 // 단가 기준: 연봉(연간) / 월 단가
 export type SalaryBasis = 'annual' | 'monthly';
 
+// 인건비 계산에 쓸 연봉: 작성 연봉(written, 입력값) / 사업계획서 연봉(plan, 4대보험·퇴직금 포함)
+export type SalaryMode = 'written' | 'plan';
+
 // 지출 출처: 자부담 현물 / 정부출연금 / 자부담 현금 (인력별로 직접 선택)
 export type FundingSource = 'inKind' | 'gov' | 'cash';
+
+// 탭 전체 금액 표시 단위
+export type AmountUnit = 'won' | 'thousand' | 'tenK' | 'million';
+export const UNIT_META: Record<
+  AmountUnit,
+  { factor: number; label: string; suffix: string }
+> = {
+  won: { factor: 1, label: '원', suffix: '원' },
+  thousand: { factor: 1_000, label: '천원', suffix: '천원' },
+  tenK: { factor: 10_000, label: '만원', suffix: '만원' },
+  million: { factor: 1_000_000, label: '백만원', suffix: '백만원' },
+};
 
 export interface Member {
   id: string;
@@ -31,6 +51,8 @@ export interface Member {
 interface LaborState {
   targetTotal: number | null; // 목표 총 인건비(원) = 세 출처 합(파생)
   salaryBasis: SalaryBasis;
+  amountUnit: AmountUnit; // 탭 전체 금액 표시/입력 단위
+  salaryMode: SalaryMode; // 인건비 계산에 쓸 연봉: 작성 연봉 / 사업계획서 연봉
   projectMonths: number; // 사업 기간(개월) — 참여개월 자동 조정 상한
   minMonths: number; // 자동 계산 시 전 인력 공통 참여개월 하한(0=하한 없음)
   members: Member[];
@@ -43,6 +65,8 @@ interface LaborState {
   govLaborPct: number;
 
   setSalaryBasis: (b: SalaryBasis) => void;
+  setAmountUnit: (u: AmountUnit) => void;
+  setSalaryMode: (m: SalaryMode) => void;
   setProjectMonths: (v: number) => void;
   setMinMonths: (v: number) => void;
   setSourceInKind: (v: number) => void;
@@ -94,9 +118,19 @@ const sumTarget = (a: number, b: number, c: number): number | null => {
   return s > 0 ? s : null;
 };
 
+// 인건비 계산에 실제 사용할 연봉(or 월단가). 작성 연봉 그대로 또는 사업계획서 연봉(급여총액).
+export const effectiveSalary = (m: Member, mode: SalaryMode): number => {
+  const base = Number(m.salary) || 0;
+  return mode === 'plan' ? calculateGrossSalary(base).grossSalary : base;
+};
+
 // 100% 투입 시 인건비. 연봉 기준이면 연봉×개월/12, 월 단가 기준이면 월단가×개월.
-export const unitCost = (m: Member, basis: SalaryBasis): number => {
-  const sal = Number(m.salary) || 0;
+export const unitCost = (
+  m: Member,
+  basis: SalaryBasis,
+  mode: SalaryMode,
+): number => {
+  const sal = effectiveSalary(m, mode);
   const mo = Number(m.months) || 0;
   return basis === 'monthly' ? sal * mo : sal * (mo / 12);
 };
@@ -107,13 +141,20 @@ export const effectiveRate = (m: Member): number =>
     ? clamp(Number(m.rate) || 0, Number(m.minRate) || 0, Number(m.maxRate) || 0)
     : Number(m.rate) || 0;
 
-// 산출 인건비 = 투입률 기반 금액(천원 내림) + 잔액 조정(연봉 최고자에게만 부여됨)
-export const memberCost = (m: Member, basis: SalaryBasis): number =>
-  floorTo(unitCost(m, basis) * (effectiveRate(m) / 100)) +
+// 산출 인건비 = 투입률 기반 금액(천원 내림) + 잔액 조정
+export const memberCost = (
+  m: Member,
+  basis: SalaryBasis,
+  mode: SalaryMode,
+): number =>
+  floorTo(unitCost(m, basis, mode) * (effectiveRate(m) / 100)) +
   (Number(m.costAdjust) || 0);
 
-export const totalCost = (members: Member[], basis: SalaryBasis): number =>
-  members.reduce((sum, m) => sum + memberCost(m, basis), 0);
+export const totalCost = (
+  members: Member[],
+  basis: SalaryBasis,
+  mode: SalaryMode,
+): number => members.reduce((sum, m) => sum + memberCost(m, basis, mode), 0);
 
 export interface SourceBudgets {
   inKind: number;
@@ -125,9 +166,10 @@ export interface SourceBudgets {
 export function sourceSums(
   members: Member[],
   basis: SalaryBasis,
+  mode: SalaryMode,
 ): SourceBudgets {
   const sums: SourceBudgets = { inKind: 0, gov: 0, cash: 0 };
-  for (const m of members) sums[m.source] += memberCost(m, basis);
+  for (const m of members) sums[m.source] += memberCost(m, basis, mode);
   return sums;
 }
 
@@ -136,6 +178,8 @@ export const useLaborStore = create<LaborState>()(
     (set, get) => ({
       targetTotal: null,
       salaryBasis: 'annual',
+      amountUnit: 'won',
+      salaryMode: 'plan',
       projectMonths: 12,
       minMonths: 0,
       members: [newMember()],
@@ -146,6 +190,10 @@ export const useLaborStore = create<LaborState>()(
 
       setSalaryBasis: (b) =>
         set((s) => ({ salaryBasis: b, members: cleared(s.members) })),
+
+      setAmountUnit: (u) => set({ amountUnit: u }),
+
+      setSalaryMode: (m) => set({ salaryMode: m }),
 
       setProjectMonths: (v) =>
         set({ projectMonths: Math.max(0, Math.round(v || 0)) }),
@@ -228,20 +276,28 @@ export const useLaborStore = create<LaborState>()(
       //   재계산 때 (행 잠금 안 한) auto 인력은 빠지고 다시 생성됨. 🔒 잠근 건 유지.
       // - 자리 못 잡은 인력: 자유 차원 있으면 산출 0(제외), 전부 고정/행잠금이면 입력값 그대로(초과).
       autoCalculate: () => {
-        const { salaryBasis, sourceInKind, sourceGov, sourceCash } = get();
+        const { salaryBasis, sourceInKind, sourceGov, sourceCash, salaryMode } =
+          get();
         const Mproj = Math.max(1, Math.round(get().projectMonths || 12));
         const minM = clamp(Math.round(get().minMonths || 0), 0, Mproj);
         // 직전 auto 인력 중 (행 잠금 안 한) 것은 버리고 새로 채운다. 잠근 건 유지.
         const members = get().members.filter((m) => !m.auto || m.locked);
 
+        // 입력연봉(base) → 실제 인건비에 쓰는 연봉. plan이면 급여총액(4대보험·퇴직금 포함).
+        const grossOf = (base: number): number =>
+          salaryMode === 'plan' ? calculateGrossSalary(base).grossSalary : base;
+        // salary 인자는 모두 '입력연봉(base)' — 여기서 mode에 맞춰 환산해 산출.
         const costAt = (salary: number, rate: number, months: number): number => {
+          const eff = grossOf(salary);
           const unit =
-            salaryBasis === 'monthly' ? salary * months : salary * (months / 12);
+            salaryBasis === 'monthly' ? eff * months : eff * (months / 12);
           return floorTo(unit * (rate / 100));
         };
         // 산출 전(내림 적용 전) 100%·입력개월 단가 — 투입률 역산용
-        const baseAt = (salary: number, months: number): number =>
-          salaryBasis === 'monthly' ? salary * months : salary * (months / 12);
+        const baseAt = (salary: number, months: number): number => {
+          const eff = grossOf(salary);
+          return salaryBasis === 'monthly' ? eff * months : eff * (months / 12);
+        };
 
         type Dim = 'rate' | 'months' | 'salary';
         // 인력별 캡(=입력값) + 자유 차원(우선순위) + 만월(상한값) 비용
@@ -265,44 +321,64 @@ export const useLaborStore = create<LaborState>()(
         });
         type Info = (typeof info)[number];
 
-        // 경계 1명을 잔여 B에 맞춰 '최우선 자유 차원' 하나만 줄여 정확 소진.
-        // 항상 산출 ≥ B(초과)로 만들고 초과분을 음수 costAdjust로 흡수.
+        // 경계 1명을 잔여 B에 맞춰 자유 차원을 '투입률 → 참여개월 → 연봉' 순으로 차례로
+        // 줄여 정확 소진. 각 단계는 산출이 B 이상이 되는 '최소'까지 줄이고, 다음(더 미세한)
+        // 차원이 초과분을 더 줄인다. 연봉은 연속값이라 보통 1,000원 미만까지 맞춰지고,
+        // 남는 1,000원 미만 잔차만 음수 costAdjust로 흡수(= 잔액조정 최후·소액).
         const fitBoundary = (
           x: Info,
           B: number,
         ): { salary: number; months: number; rate: number; costAdjust: number } => {
-          const dim = x.free[0];
-          if (dim === 'rate') {
-            const base = baseAt(x.salary, x.months);
-            let rate = base > 0 ? clamp(Math.ceil((B / base) * 100), 1, x.rateCap) : 0;
-            while (rate < x.rateCap && costAt(x.salary, rate, x.months) < B) rate += 1;
-            const cost = costAt(x.salary, rate, x.months);
-            return { salary: x.salary, months: x.months, rate, costAdjust: B - cost };
-          }
-          if (dim === 'months') {
-            const lo = Math.max(1, minM);
-            let mo = x.months;
-            let cost = costAt(x.salary, x.rateCap, x.months);
-            for (let k = lo; k <= x.months; k++) {
-              const c = costAt(x.salary, x.rateCap, k);
-              if (c >= B) {
-                mo = k;
-                cost = c;
-                break;
+          let salary = x.salary;
+          let months = x.months;
+          let rate = x.rateCap;
+          for (const dim of x.free) {
+            if (dim === 'rate') {
+              // 산출 ≥ B를 유지하는 '최소' 정수 투입률(1~rateCap)
+              const base = baseAt(salary, months);
+              if (base > 0) {
+                let r = clamp(Math.ceil((B / base) * 100), 1, x.rateCap);
+                while (r < x.rateCap && costAt(salary, r, months) < B) r += 1;
+                rate = r;
+              }
+            } else if (dim === 'months') {
+              // 산출 ≥ B를 유지하는 '최소' 참여개월(minM~입력개월)
+              const lo = Math.max(1, minM);
+              for (let k = lo; k <= months; k++) {
+                if (costAt(salary, rate, k) >= B) {
+                  months = k;
+                  break;
+                }
+              }
+            } else {
+              // 연봉(입력연봉 base): 산출(costAt, mode 반영) ≥ B 유지하는 '최소' base.
+              //   plan 모드면 산출이 grossOf(base) 기준이라 grossMul로 근사 후 실측 보정.
+              const grossMul =
+                salaryMode === 'plan'
+                  ? 1 + RETIREMENT_RATE + EMPLOYER_INSURANCE_RATE
+                  : 1;
+              const factor =
+                (salaryBasis === 'monthly' ? months : months / 12) *
+                (rate / 100) *
+                grossMul;
+              if (factor > 0) {
+                let base = Math.ceil(B / factor);
+                let guard = 0;
+                while (
+                  base < x.salary &&
+                  costAt(base, rate, months) < B &&
+                  guard < 200
+                ) {
+                  const gap = B - costAt(base, rate, months);
+                  base += Math.max(1, Math.ceil(gap / factor));
+                  guard += 1;
+                }
+                salary = Math.min(base, x.salary); // 입력값(상한) 초과 금지
               }
             }
-            return { salary: x.salary, months: mo, rate: x.rateCap, costAdjust: B - cost };
           }
-          // salary: 투입률·개월 고정, 연봉만 줄여 맞춤
-          const factor =
-            (salaryBasis === 'monthly' ? x.months : x.months / 12) * (x.rateCap / 100);
-          let sal = factor > 0 ? Math.ceil(B / factor) : 0;
-          if (factor > 0 && floorTo(sal * factor) < B) {
-            sal += Math.ceil((B - floorTo(sal * factor)) / factor);
-          }
-          sal = Math.min(sal, x.salary); // 입력값(상한) 초과 금지
-          const cost = costAt(sal, x.rateCap, x.months);
-          return { salary: sal, months: x.months, rate: x.rateCap, costAdjust: B - cost };
+          const cost = costAt(salary, rate, months);
+          return { salary, months, rate, costAdjust: B - cost };
         };
 
         const buckets: { key: FundingSource; remaining: number }[] = [
@@ -325,7 +401,7 @@ export const useLaborStore = create<LaborState>()(
         for (const m of members) {
           if (!m.locked) continue;
           done.add(m.id);
-          bucketOf(m.source).remaining -= memberCost(m, salaryBasis);
+          bucketOf(m.source).remaining -= memberCost(m, salaryBasis, salaryMode);
         }
 
         for (const bk of buckets) {
@@ -417,13 +493,21 @@ export const useLaborStore = create<LaborState>()(
             generated.push(newAuto(bk.key, salary, 100, 0));
             R -= costAt(salary, 100, Mproj);
           }
-          // 마지막 1명: 가장 작은 단가로 '정수% 투입률'이 잔여 이상 되게 하고 초과분은 음수 costAdjust.
+          // 마지막 1명: 현실적 연봉대를 유지한 채 투입률→연봉 순으로 잔여를 맞춤
+          //   (fitBoundary 재사용). costAdjust는 1,000원 미만 잔차만.
           if (R >= ROUND_UNIT && generated.length < MAX_AUTO_MEMBERS) {
-            const salary = band[band.length - 1];
-            const base = baseAt(salary, Mproj);
-            let rate = base > 0 ? clamp(Math.ceil((R / base) * 100), 1, 100) : 0;
-            while (rate < 100 && costAt(salary, rate, Mproj) < R) rate += 1;
-            generated.push(newAuto(bk.key, salary, rate, R - costAt(salary, rate, Mproj)));
+            const sal0 = band[band.length - 1];
+            const synth: Info = {
+              id: '',
+              source: bk.key,
+              salary: sal0,
+              months: Mproj,
+              rateCap: 100,
+              free: ['rate', 'salary'],
+              full: costAt(sal0, 100, Mproj),
+            };
+            const r = fitBoundary(synth, R);
+            generated.push(newAuto(bk.key, r.salary, r.rate, r.costAdjust));
           }
         }
 
@@ -434,6 +518,8 @@ export const useLaborStore = create<LaborState>()(
         set({
           targetTotal: null,
           salaryBasis: 'annual',
+          amountUnit: 'won',
+          salaryMode: 'plan',
           projectMonths: 12,
           minMonths: 0,
           members: [newMember()],
@@ -446,15 +532,18 @@ export const useLaborStore = create<LaborState>()(
     {
       name: 'proposal_writer.labor.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 9,
+      version: 11,
       // v1: annualSalary → v2: salary+salaryBasis → v3: costAdjust → v4: 출처 예산
       //   → v5: Member.source → v6: Member.minMonths(폐기) → v7: 전역 minMonths
       //   → v8: salary/months/행 잠금(고정 체크박스) → v9: auto(자동추가) 복구
+      //   → v10: amountUnit(금액 표시 단위) → v11: salaryMode(작성/사업계획서 연봉)
       migrate: (persisted) => {
         const s = (persisted ?? {}) as {
           targetTotal?: number | null;
           members?: Array<Record<string, unknown>>;
           salaryBasis?: SalaryBasis;
+          amountUnit?: AmountUnit;
+          salaryMode?: SalaryMode;
           projectMonths?: number;
           minMonths?: number;
           sourceInKind?: number;
@@ -490,6 +579,8 @@ export const useLaborStore = create<LaborState>()(
         return {
           targetTotal: sumTarget(sourceInKind, sourceGov, sourceCash),
           salaryBasis: s.salaryBasis ?? 'annual',
+          amountUnit: s.amountUnit ?? 'won',
+          salaryMode: s.salaryMode ?? 'plan',
           projectMonths: Number(s.projectMonths ?? 12),
           minMonths: Number(s.minMonths ?? 0),
           members,
