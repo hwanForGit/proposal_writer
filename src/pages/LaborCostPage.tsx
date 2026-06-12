@@ -25,6 +25,8 @@ export default function LaborCostPage() {
   const salaryBasis = useLaborStore((s) => s.salaryBasis);
   const projectMonths = useLaborStore((s) => s.projectMonths);
   const setProjectMonths = useLaborStore((s) => s.setProjectMonths);
+  const minMonths = useLaborStore((s) => s.minMonths);
+  const setMinMonths = useLaborStore((s) => s.setMinMonths);
   const members = useLaborStore((s) => s.members);
   const sourceInKind = useLaborStore((s) => s.sourceInKind);
   const sourceGov = useLaborStore((s) => s.sourceGov);
@@ -84,7 +86,7 @@ export default function LaborCostPage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-900">🧮 사업비 계산</h1>
           <p className="mt-1 text-xs text-gray-500">
-            정부지원금·자부담으로 총 사업비를 구성하고, 용역비(인건비)를
+            정부출연금·자부담으로 총 사업비를 구성하고, 용역비(인건비)를
             산출합니다.
           </p>
         </div>
@@ -134,13 +136,21 @@ export default function LaborCostPage() {
                         Math.round((pc.total * govLaborPct) / 100) - pc.inKind,
                       )
                     : (pcGovGrant ?? 0),
-                  pc.cash,
+                  0, // 자부담 현금은 기본 0원 — 필요하면 옆 버튼으로 따로 가져오기
                 )
               }
               className="rounded border border-emerald-300 px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50"
-              title="위 '총 사업비'의 자부담 현물·정부지원금·자부담 현금 값을 가져옵니다."
+              title="위 '총 사업비'의 자부담 현물·정부출연금을 가져옵니다(자부담 현금은 0원)."
             >
               💰 총 사업비에서 가져오기
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourceCash(pc.cash)}
+              className="rounded border border-teal-300 px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-50"
+              title="위 '총 사업비'의 자부담 현금 값만 가져옵니다."
+            >
+              💵 자부담 현금 가져오기
             </button>
           </div>
           <div className="flex items-center gap-3 text-sm">
@@ -153,6 +163,22 @@ export default function LaborCostPage() {
                 value={projectMonths || ''}
                 onChange={(e) => setProjectMonths(Number(e.target.value) || 0)}
                 placeholder="12"
+                className="w-16 rounded border border-gray-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none"
+              />
+              <span className="text-gray-500">개월</span>
+            </label>
+            <label
+              className="flex items-center gap-1.5"
+              title="자동 계산 시 전 인력 공통 참여개월 하한. 0이면 하한 없음."
+            >
+              <span className="text-gray-600">최소 개월</span>
+              <input
+                type="number"
+                min={0}
+                max={projectMonths || 120}
+                value={minMonths || ''}
+                onChange={(e) => setMinMonths(Number(e.target.value) || 0)}
+                placeholder="0"
                 className="w-16 rounded border border-gray-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none"
               />
               <span className="text-gray-500">개월</span>
@@ -193,11 +219,11 @@ export default function LaborCostPage() {
           <span>%</span>
           {govLaborAuto ? (
             <span className="text-[11px] text-emerald-700">
-              → 정부출연금 = 총사업비×{govLaborPct}% − 자부담 현물 (자동)
+              → 정부출연금 인건비 = 총사업비×{govLaborPct}% − 자부담 현물 (자동)
             </span>
           ) : (
             <span className="text-[11px] text-gray-400">
-              (0 = 미사용, 정부출연금 직접 입력)
+              (0 = 미사용, 정부출연금 인건비 직접 입력)
             </span>
           )}
         </label>
@@ -210,7 +236,7 @@ export default function LaborCostPage() {
             assigned={assigned.inKind}
           />
           <SourceBudgetInput
-            label="② 정부출연금"
+            label="② 정부출연금 인건비"
             value={sourceGov}
             onChange={setSourceGov}
             assigned={assigned.gov}
@@ -296,13 +322,15 @@ export default function LaborCostPage() {
             onClick={autoCalculate}
             disabled={targetTotal == null}
             className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-            title="고정 투입률은 유지하고, 변동 인력은 최대 상한선 이하에서 연봉 높은 순으로 목표(출처 예산 합)까지 자동 계산합니다."
+            title="고정(🔒) 체크한 값은 안 바꾸고, 고정 안 한 값만(투입률→참여개월→연봉 순) 줄여 목표(출처 예산 합)에 맞춥니다. 모자라면 임의 인력을 자동 추가하고 재계산 때 다시 생성(🔒 고정한 건 유지)."
           >
             ⚙️ 자동 계산하기
           </button>
           <span className="text-[11px] text-gray-500">
-            고정 투입률은 그대로 두고, 변동 인력은 <b>최대 상한선 이하</b>에서{' '}
-            <b>연봉 높은 순</b>으로 목표(출처 예산 합)까지 자동 산정합니다.
+            <b>고정(🔒) 체크한 값은 그대로</b> 두고, 고정 안 한 값만 줄여 목표(출처 예산
+            합)에 맞춥니다. 한 인력에서 조정 우선순위는 <b>투입률 → 참여개월 → 연봉</b>.
+            인력으로 다 못 채우면 <b>임의 인력(“자동”)을 추가</b>하고, 재계산 때 다시
+            생성합니다(유지하려면 <b>🔒 전체 고정</b>).
           </span>
         </div>
       </section>
@@ -349,7 +377,7 @@ function MoneyInput({
 
 const SOURCE_META: Record<FundingSource, { label: string; cls: string }> = {
   inKind: { label: '자부담 현물', cls: 'bg-amber-100 text-amber-800' },
-  gov: { label: '정부출연금', cls: 'bg-blue-100 text-blue-800' },
+  gov: { label: '정부출연금 인건비', cls: 'bg-blue-100 text-blue-800' },
   cash: { label: '자부담 현금', cls: 'bg-teal-100 text-teal-800' },
 };
 
@@ -398,7 +426,7 @@ function SourceBudgetInput({
   );
 }
 
-// ─── 총 사업비 (정부지원금 + 자부담금) ──────────────────────────────
+// ─── 총 사업비 (정부출연금 + 자부담금) ──────────────────────────────
 
 function ProjectCostSection() {
   const govGrant = useProjectCostStore((s) => s.govGrant);
@@ -423,7 +451,7 @@ function ProjectCostSection() {
 
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <label className="flex items-center gap-2">
-          <span className="text-gray-700">정부지원금</span>
+          <span className="text-gray-700">정부출연금</span>
           <MoneyInput
             value={govGrant ?? 0}
             onChange={(n) => setGovGrant(n > 0 ? n : null)}
@@ -449,7 +477,7 @@ function ProjectCostSection() {
 
       {/* 자부담금 / 총 사업비 요약 */}
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <SummaryBox label="정부지원금" value={govGrant ?? 0} />
+        <SummaryBox label="정부출연금" value={govGrant ?? 0} />
         <SummaryBox label="자부담금" value={selfFund} />
         <SummaryBox label="총 사업비" value={total} highlight />
       </div>
@@ -508,6 +536,40 @@ function SummaryBox({
   );
 }
 
+// ─── 고정 체크박스 ───────────────────────────────────────────────────
+
+function LockCheck({
+  checked,
+  onChange,
+  disabled,
+  label,
+  title,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+  title?: string;
+}) {
+  return (
+    <label
+      title={title}
+      className={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
+        disabled ? 'cursor-not-allowed text-gray-300' : 'cursor-pointer text-gray-500'
+      }`}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3 w-3 accent-blue-600"
+      />
+      {label ?? '고정'}
+    </label>
+  );
+}
+
 // ─── 인력 행 ─────────────────────────────────────────────────────────
 
 function MemberRow({
@@ -528,12 +590,28 @@ function MemberRow({
   return (
     <tr className="border-b border-gray-100 align-top">
       <td className="px-3 py-2">
-        <input
-          type="text"
-          value={m.name}
-          onChange={(e) => onChange({ name: e.target.value })}
-          placeholder="예: 홍길동 / 책임연구원"
-          className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+        <div className="flex items-center gap-1.5">
+          {m.auto && (
+            <span
+              className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700"
+              title="잔여 예산을 채우려 자동 생성된 인력. 재계산 때 다시 생성됩니다. 유지하려면 🔒 전체 고정."
+            >
+              자동
+            </span>
+          )}
+          <input
+            type="text"
+            value={m.name}
+            onChange={(e) => onChange({ name: e.target.value })}
+            placeholder="예: 홍길동 / 책임연구원"
+            className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+        <LockCheck
+          checked={m.locked}
+          onChange={(v) => onChange({ locked: v })}
+          label="🔒 전체 고정"
+          title="이 인력의 연봉·개월·투입률을 모두 고정(자동계산이 안 건드리고, 자동 인력이면 재계산 때도 안 빠짐)"
         />
       </td>
       <td className="px-3 py-2">
@@ -542,6 +620,12 @@ function MemberRow({
           onChange={(n) => onChange({ salary: n })}
           placeholder={basis === 'monthly' ? '예: 5,000,000' : '예: 60,000,000'}
           className={numCls}
+        />
+        <LockCheck
+          checked={m.salaryLocked || m.locked}
+          disabled={m.locked}
+          onChange={(v) => onChange({ salaryLocked: v })}
+          title="연봉총액 고정(자동계산이 안 바꿈)"
         />
       </td>
       <td className="px-3 py-2">
@@ -552,6 +636,12 @@ function MemberRow({
           value={m.months || ''}
           onChange={(e) => onChange({ months: Number(e.target.value) || 0 })}
           className={`${numCls} w-20`}
+        />
+        <LockCheck
+          checked={m.monthsLocked || m.locked}
+          disabled={m.locked}
+          onChange={(v) => onChange({ monthsLocked: v })}
+          title="참여개월 고정(자동계산이 안 바꿈)"
         />
       </td>
       <td className="px-3 py-2">
@@ -578,8 +668,11 @@ function MemberRow({
                 type="number"
                 min={0}
                 max={100}
+                step={1}
                 value={m.rate || ''}
-                onChange={(e) => onChange({ rate: Number(e.target.value) || 0 })}
+                onChange={(e) =>
+                  onChange({ rate: Math.round(Number(e.target.value)) || 0 })
+                }
                 className={`${numCls} w-16`}
               />
               <span className="text-xs text-gray-500">%</span>
@@ -592,12 +685,13 @@ function MemberRow({
                   type="number"
                   min={0}
                   max={100}
+                  step={1}
                   value={m.maxRate || ''}
                   onChange={(e) =>
-                    onChange({ maxRate: Number(e.target.value) || 0 })
+                    onChange({ maxRate: Math.round(Number(e.target.value)) || 0 })
                   }
                   className={`${numCls} w-14`}
-                  title="최대 투입률(상한선, %)"
+                  title="최대 투입률(상한선, 정수 %)"
                 />
                 <span>%</span>
               </div>
@@ -630,7 +724,7 @@ function MemberRow({
             title="이 인력 인건비의 지출 출처"
           >
             <option value="inKind">자부담 현물</option>
-            <option value="gov">정부출연금</option>
+            <option value="gov">정부출연금 인건비</option>
             <option value="cash">자부담 현금</option>
           </select>
         </div>

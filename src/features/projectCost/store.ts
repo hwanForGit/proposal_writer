@@ -5,7 +5,7 @@ const clamp = (v: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, v));
 
 interface ProjectCostState {
-  govGrant: number | null; // 정부지원금(원)
+  govGrant: number | null; // 정부출연금(원)
   selfRatioPct: number; // 자부담 비율(%) — 총사업비 대비
   cashRatioPct: number; // 자부담금 중 현금 비율(%)
 
@@ -36,15 +36,15 @@ export const useProjectCostStore = create<ProjectCostState>()(
 );
 
 export interface ProjectCostResult {
-  total: number; // 총 사업비 = 정부지원금 + 자부담금
+  total: number; // 총 사업비 = 정부출연금 + 자부담금
   selfFund: number; // 자부담금
   cash: number; // 자부담금 중 현금
   inKind: number; // 자부담금 중 현물
 }
 
 // 총사업비 대비 자부담 비율:
-//   총사업비 = 정부지원금 ÷ (1 − 자부담비율)
-//   자부담금 = 총사업비 − 정부지원금
+//   총사업비 = 정부출연금 ÷ (1 − 자부담비율)
+//   자부담금 = 총사업비 − 정부출연금
 //   현금 = 자부담금 × 현금비율 / 현물 = 자부담금 − 현금
 export function computeProjectCost(
   govGrant: number | null,
