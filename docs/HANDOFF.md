@@ -16,12 +16,29 @@ Claude가 README.md → 이 파일 → `docs/prd_*_spec.md` → `git log` 순으
 
 ---
 
-## 현재 진행 상태 (2026-06-11)
+## 현재 진행 상태 (2026-06-15)
 
 ### 완료된 마일스톤
 - **Phase 1** (M1~M8, M10, M11) — 파일 업로드·LLM 연동·트리 편집기·localStorage·UX
 - **Phase 2** (Step 3 본문) — 중분류 단위 본문 작성, 이어쓰기, 편집
 - **Phase 3** (M23~M27) — 통합 마크다운, DOCX/PDF 다운로드, 서식 검증 샘플, "한컴 HWPX 저장" 안내
+
+### 2026-06-12~15 세션 (다음 세션 이어가기용) ★
+이번 세션 주요 작업(대부분 commit 됨 — `git log` 확인, 마지막 커밋 `d28ab1b` 이후 분량/DOCX 추가 작업 commit 예정):
+1. **사업비 계산 탭 대규모 확장** (commit `e4744c2`, `b054c65`)
+   - 금액 단위 선택(원/천원/만원/백만원, `amountUnit`), 입력 Enter/blur 지연 적용(`MoneyInput`/`NumInput`, 노란 테두리 안내), 전체 UI slate/indigo 모던 정비.
+   - **잠금 기반 자동계산 solver**(`Member.salaryLocked/monthsLocked/locked`): 고정값 불변, 미고정만 투입률→참여개월→연봉 순 조정. 잔여 자동 인력 추가(`auto`, 행잠금하면 유지).
+   - **작성 연봉 vs 사업계획서 연봉**(`grossSalary.ts` `calculateGrossSalary` = 4대보험 9.5%+퇴직 8.33%, Vitest `npm test`). `salaryMode` 토글. persist labor **v11**.
+   - **사업비 총괄표**(`features/budget/store.ts` + `BudgetTable`): 대/중분류, 정부출연금·민간(현금·현물·소계)·합계·구성비, 출처별 예산/사용/잔여, CSV/엑셀/MD 내보내기.
+   - 정부출연금 인건비 한도 = 총사업비×N% − **자부담금 전체(pc.selfFund)**.
+2. **본문 생성 안정화** (commit `d28ab1b`)
+   - 경과 타이머 `startedAt` 기준(섹션 이동에도 0초 초기화 안 됨), 504 시 목표 분량 0.6배씩 4회 재시도, max_tokens를 회차 목표 자수에 비례(과도 생성 억제)+잘리면 매끄럽게 끝날 때까지 이어쓰기, Step2 프롬프트에 공고·양식 세부목차/지침 준수 원칙.
+   - 다운로드: 가이드를 앰버 인용블록으로 분리 + 본문 라벨/구분선, **'본문만' 다운로드 범위** 신설.
+3. **(마지막 미커밋분)** DOCX 글씨크기(대15/중13/소11/본문10pt)+묶음 간격 — `docx.ts` jszip 후처리(pandoc 검증 완료). `proceedToStep3`가 **페이지 배분 자동 생성**(목표 페이지 설정 시 본문 생성 전 보장).
+
+### ⚠️ 미해결/검증 필요 (다음 세션 우선)
+- **본문 페이지 수 과다** — 30p 목표인데 130p→90p로 줄었으나 아직 초과. 원인 추정: (a) 페이지 배분 미적용(→자동생성으로 해결됨, **재생성 후 검증 필요**), (b) 'full' 다운로드는 가이드가 ~절반(→'본문만' 사용), (c) `CHARS_PER_PAGE`(현 1300, `workspace/store.ts`) 실제 렌더 밀도와 불일치 가능. **다음 세션: 본문 재생성 → '본문만' 다운로드 → 백엔드 로그 `output=N자` & 실제 페이지수로 `CHARS_PER_PAGE` 캘리브레이션.**
+- 서버 `exporters/pdf.ts`의 `waitUntil:'networkidle0'` 타입에러(기존, tsx 런타임 무관) — 정리 가능.
 
 ### 2026-06-11 추가 작업 (★ commit 대기 중일 수 있음 — git log 확인)
 - **좌측 사이드바 탭 뷰** — `RootLayout`을 좌측 사이드바로 개편. 탭: **[계획서 작성]**(`/` = 기존 `WorkspacePage`) / **[사업비 계산]**(`/labor-cost` = `LaborCostPage`). 두 기능 독립. (`routes/index.tsx`, `RootLayout.tsx`, `pages/LaborCostPage.tsx`)

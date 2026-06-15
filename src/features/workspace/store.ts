@@ -631,6 +631,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       return;
     }
 
+    // 목표 페이지(pageLimit)가 설정돼 있으면 본문 생성 전에 '페이지 배분'을 보장한다.
+    // 배분이 없으면 본문 목표 자수가 비어(null) 기본 분량으로 길게 생성돼 페이지가 폭증함.
+    {
+      const { pageLimit, pageAllocation } = get();
+      if (pageLimit && pageLimit > 0) {
+        const itemKeys = new Set(pageAllocation.items.map((it) => it.key));
+        const covered =
+          pageAllocation.status === 'ready' &&
+          refs.every((r) => itemKeys.has(`${r.mainIndex}-${r.midIndex}`));
+        if (!covered) await get().generatePageAllocation();
+      }
+    }
+
     const bodies: BodyState[] = refs.map((ref) => ({
       id: `body-${ref.mainIndex}-${ref.midIndex}`,
       ref,
