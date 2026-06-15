@@ -38,6 +38,7 @@ export interface OutlineStepState {
   modelId: string | null;
   generatedAt: string | null;
   elapsedMs: number | null;
+  startedAt?: number | null; // 생성 시작 시각(ms). 경과 시간 표시 기준(화면 이동에도 유지).
   usage: OutlineUsage | null;
   finishReason: string | null;
   error: { code: string; message: string } | null;
@@ -49,6 +50,7 @@ const initialStep: OutlineStepState = {
   modelId: null,
   generatedAt: null,
   elapsedMs: null,
+  startedAt: null,
   usage: null,
   finishReason: null,
   error: null,
@@ -64,6 +66,7 @@ export interface SectionState {
   modelId: string | null;
   generatedAt: string | null;
   elapsedMs: number | null;
+  startedAt?: number | null; // 생성 시작 시각(ms)
   usage: OutlineUsage | null;
   finishReason: string | null;
   error: { code: string; message: string } | null;
@@ -109,6 +112,7 @@ export interface BodyState {
   modelId: string | null;
   generatedAt: string | null;
   elapsedMs: number | null;
+  startedAt?: number | null; // 생성 시작 시각(ms)
   usage: OutlineUsage | null;
   error: { code: string; message: string } | null;
 }
@@ -170,7 +174,10 @@ const initialPageAllocation: PageAllocationState = {
 };
 
 // 1페이지 ≈ 한국어 본문 글자 수(A4, 맑은 고딕 10~11pt, 줄간격 160% 기준 근사).
-export const CHARS_PER_PAGE = 1800;
+// 한 페이지당 추정 글자 수(렌더 밀도). 목표 페이지 × 이 값 = 본문 목표 자수.
+// 실제 PDF/DOCX 렌더 밀도(제목·표·여백 포함)에 맞춘 보수적 값. 결과가 목표보다 길면
+// 더 낮추고, 짧으면 높여 보정하면 됨.
+export const CHARS_PER_PAGE = 1300;
 
 // 해당 본문(중분류)에 배정된 목표 글자 수. 배분이 없으면 null(기존 단일 호출 흐름).
 const targetCharsForBody = (
@@ -324,7 +331,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       outline: {
         ...state.outline,
         currentStep: 1,
-        step1: { ...initialStep, status: 'generating' },
+        step1: { ...initialStep, status: 'generating', startedAt: Date.now() },
       },
     }));
     try {
@@ -447,7 +454,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...state.outline.step2,
           sections: state.outline.step2.sections.map((s, idx) =>
             idx === i
-              ? { ...s, status: 'generating', markdown: null, error: null }
+              ? {
+                  ...s,
+                  status: 'generating',
+                  markdown: null,
+                  error: null,
+                  startedAt: Date.now(),
+                }
               : s,
           ),
         },
@@ -690,7 +703,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...state.outline.step3,
           bodies: state.outline.step3.bodies.map((b, idx) =>
             idx === i
-              ? { ...b, status: 'generating', markdown: null, error: null }
+              ? {
+                  ...b,
+                  status: 'generating',
+                  markdown: null,
+                  error: null,
+                  startedAt: Date.now(),
+                }
               : b,
           ),
         },
@@ -708,7 +727,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       targetChars: target ?? undefined,
     };
 
-    // 504/502/503/0 류는 1회 자동 재시도 (5초 대기)
+    // 504/502/503/0 류(게이트웨이 타임아웃 등)는 자동 재시도.
+    //   재시도마다 '목표 분량을 0.6배씩 축소'해 초기 호출을 가볍게 → 504 회피.
+    //   (줄여서 부족해진 분량은 아래 이어쓰기 루프가 504-안전한 작은 청크로 채움)
     const isTransient = (err: unknown): boolean => {
       if (!(err instanceof ApiError)) return false;
       const status = err.status;
@@ -718,17 +739,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       );
     };
 
+    const MAX_ATTEMPTS = 4;
+    const TARGET_FLOOR = 1200; // 더는 줄이지 않는 목표 하한(자)
+    let attemptTarget: number | undefined = target ?? undefined;
     let res: Awaited<ReturnType<typeof generateBodySection>> | null = null;
     let lastErr: unknown = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        if (attempt > 1) await new Promise((r) => setTimeout(r, 5000));
-        res = await generateBodySection(callArgs);
+        if (attempt > 1) await new Promise((r) => setTimeout(r, 4000));
+        res = await generateBodySection({ ...callArgs, targetChars: attemptTarget });
         lastErr = null;
         break;
       } catch (err) {
         lastErr = err;
-        if (!isTransient(err) || attempt === 2) break;
+        if (!isTransient(err) || attempt === MAX_ATTEMPTS) break;
+        // 다음 시도엔 목표 분량 축소(무목표였으면 보수적 목표로 시작).
+        attemptTarget =
+          attemptTarget == null
+            ? 2000
+            : Math.max(TARGET_FLOOR, Math.round(attemptTarget * 0.6));
       }
     }
 
@@ -771,21 +800,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }
 
     // ── 목표 페이지 분량까지 자동 이어쓰기 ──
-    // 배정 목표가 있으면 초기 호출만으로 부족한 경우 목표의 ~85%에 도달할 때까지
-    // 이어쓰기를 자동 반복(호출당 ~2,200자로 504 회피). 더 안 늘면 마무리로 보고 중단.
+    // 배정 목표가 있으면 목표의 ~85%에 도달할 때까지 이어쓰기 반복(호출당 ~2,200자, 504 회피).
+    // ★ 단, 마지막 응답이 토큰 한도로 '잘린(finish=length)' 상태면, 목표를 넘었어도
+    //   문장이 매끄럽게 끝(finish=stop)날 때까지 이어써서 '내용이 중간에 잘리는' 것을 방지.
     if (res && target) {
-      const maxChunks = Math.ceil(target / 2000) + 2; // 안전장치
+      const truncated = (b: { finishReason: string | null } | undefined) =>
+        b?.finishReason === 'length';
+      const maxChunks = Math.ceil(target / 2000) + 4; // 마무리 이어쓰기 여유 포함
       for (let c = 0; c < maxChunks; c++) {
         if (get().autoRunStop) break;
         const b = get().outline.step3.bodies[i];
         if (!b || b.status !== 'ready' || !b.markdown) break;
         const before = b.markdown.length;
-        if (before >= target * 0.85) break; // 목표 도달
+        // 충분히 채웠고(85%↑) + 깔끔히 끝났으면 종료. 잘린 상태면 계속 이어써 마무리.
+        if (before >= target * 0.85 && !truncated(b)) break;
         await get().continueCurrentBody(i);
         const b2 = get().outline.step3.bodies[i];
         if (!b2 || b2.status === 'error') break;
         const after = b2.markdown?.length ?? before;
-        if (after - before < 200) break; // 증가량 미미 → 모델이 마무리한 것으로 간주
+        // 증가량이 미미하고(모델이 마무리) + 잘리지도 않았으면 종료.
+        if (after - before < 200 && !truncated(b2)) break;
       }
     }
   },
@@ -813,7 +847,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         step3: {
           ...state.outline.step3,
           bodies: state.outline.step3.bodies.map((b, idx) =>
-            idx === i ? { ...b, status: 'generating', error: null } : b,
+            idx === i
+              ? { ...b, status: 'generating', error: null, startedAt: Date.now() }
+              : b,
           ),
         },
       },

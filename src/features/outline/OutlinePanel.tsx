@@ -105,6 +105,15 @@ export default function OutlinePanel() {
     currentSection?.status === 'generating';
   const isStep3Busy = currentBody?.status === 'generating';
 
+  // 경과 시간은 '실제 생성 시작 시각(startedAt)' 기준 — 다른 섹션 봤다가 돌아와도
+  // 0초로 초기화되지 않고 진행 중인 작업의 실제 경과를 이어서 보여준다.
+  const busyStartedAt = isStep1Generating
+    ? step1.startedAt
+    : isStep3Busy
+      ? currentBody?.startedAt
+      : isStep2Busy
+        ? currentSection?.startedAt
+        : null;
   const [elapsedSec, setElapsedSec] = useState(0);
   useEffect(() => {
     const busy = isStep1Generating || isStep2Busy || isStep3Busy;
@@ -112,13 +121,13 @@ export default function OutlinePanel() {
       setElapsedSec(0);
       return;
     }
-    const start = Date.now();
-    setElapsedSec(0);
-    const id = window.setInterval(() => {
-      setElapsedSec(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
+    const base = busyStartedAt ?? Date.now(); // startedAt 없으면(섹션 목록 페치 등) 현재 기준
+    const tick = () =>
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - base) / 1000)));
+    tick();
+    const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [isStep1Generating, isStep2Busy, isStep3Busy]);
+  }, [isStep1Generating, isStep2Busy, isStep3Busy, busyStartedAt]);
 
   const hasAnything =
     step1.markdown != null || step2.sections.some((s) => s.markdown);

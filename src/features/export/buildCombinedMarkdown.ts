@@ -4,11 +4,12 @@ import type { CoverMeta } from './types';
 
 /**
  * 다운로드 범위 옵션.
- * - 'full'              : 표지 + (선택)Step 1 + 아웃라인(트리·가이드 포함) + 본문 + 부록
- * - 'outline-with-guide': 표지 + (선택)Step 1 + 아웃라인(트리·가이드 포함). 본문 제외
- * - 'titles-only'       : 표지 + (선택)Step 1 + 제목 트리만(대·중·소분류 제목). 가이드·본문 모두 제외
+ * - 'full'              : 표지 + (선택)Step 1 + 아웃라인(가이드) + 본문 + 부록
+ * - 'body'             : 표지 + (선택)Step 1 + 본문만(가이드 제외) — 제출용 깔끔한 사업계획서
+ * - 'outline-with-guide': 표지 + (선택)Step 1 + 아웃라인(가이드). 본문 제외
+ * - 'titles-only'       : 표지 + (선택)Step 1 + 제목 트리만(대·중·소분류 제목). 가이드·본문 제외
  */
-export type ExportScope = 'full' | 'outline-with-guide' | 'titles-only';
+export type ExportScope = 'full' | 'body' | 'outline-with-guide' | 'titles-only';
 
 export interface BuildOptions {
   scope: ExportScope;
@@ -18,14 +19,22 @@ const DEFAULT_OPTIONS: BuildOptions = { scope: 'full' };
 
 const trim = (s: string | null | undefined): string => (s ?? '').trim();
 
+// 여러 줄 텍스트를 마크다운 인용블록(> )으로 감싼다. 가이드를 본문과 시각적으로 분리.
+const blockquote = (text: string): string =>
+  text
+    .split('\n')
+    .map((l) => (l.trim() ? `> ${l}` : '>'))
+    .join('\n');
+
 export function buildCombinedMarkdown(
   outline: OutlineState,
   cover: CoverMeta,
   options: BuildOptions = DEFAULT_OPTIONS,
 ): string {
   const parts: string[] = [];
-  const includeBody = options.scope === 'full';
-  const includeGuide = options.scope !== 'titles-only';
+  const includeBody = options.scope === 'full' || options.scope === 'body';
+  const includeGuide =
+    options.scope === 'full' || options.scope === 'outline-with-guide';
 
   // 표지
   const hasCover =
@@ -65,32 +74,52 @@ export function buildCombinedMarkdown(
     for (const section of outline.step2.sections) {
       const sectionMd = trim(section.markdown);
       if (!sectionMd) continue;
-      // 대분류 헤딩
+      // 대분류 헤딩 (H3)
       parts.push(`### ${section.index}. ${section.title}`);
       parts.push('');
-      if (includeGuide) {
-        // 트리 마크다운 그대로 (대·중·소분류 + 가이드)
-        parts.push(sectionMd);
-      } else {
-        // 가이드 제외 — 제목 트리만 정리해서 출력
+
+      if (options.scope === 'titles-only') {
         const tree = parseSection(sectionMd, section.title);
         const titles = serializeTitlesOnly(tree);
-        if (titles) parts.push(titles);
+        if (titles) {
+          parts.push(titles);
+          parts.push('');
+        }
+        continue;
       }
-      parts.push('');
 
-      // 같은 대분류에 속하는 Step 3 본문들 (옵션에 따라)
+      // 작성 가이드 — 인용블록 + 라벨로 본문과 명확히 분리
+      if (includeGuide) {
+        parts.push(
+          '> 📋 **작성 가이드** — 집필 지침이며, 실제 제출 본문이 아닙니다.',
+        );
+        parts.push('>');
+        parts.push(blockquote(sectionMd));
+        parts.push('');
+      }
+
+      // 같은 대분류에 속하는 Step 3 본문들
       if (includeBody) {
         const bodies = outline.step3.bodies.filter(
           (b) => b.ref.mainIndex === section.index && trim(b.markdown),
         );
-        for (const body of bodies) {
-          parts.push(
-            `#### ${body.ref.mainIndex}.${body.ref.midIndex + 1} ${body.ref.midTitle}`,
-          );
-          parts.push('');
-          parts.push(trim(body.markdown));
-          parts.push('');
+        if (bodies.length > 0) {
+          // 가이드가 앞에 있을 때만 본문 시작을 구분선·라벨로 명시
+          if (includeGuide) {
+            parts.push('---');
+            parts.push('');
+            parts.push('✍️ **본문**');
+            parts.push('');
+          }
+          for (const body of bodies) {
+            // 중분류 본문 헤딩 (H4)
+            parts.push(
+              `#### ${body.ref.mainIndex}.${body.ref.midIndex + 1} ${body.ref.midTitle}`,
+            );
+            parts.push('');
+            parts.push(trim(body.markdown));
+            parts.push('');
+          }
         }
       }
     }

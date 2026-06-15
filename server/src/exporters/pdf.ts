@@ -20,9 +20,29 @@ const PDF_STYLES = `
   }
   h1 { font-size: 1.5rem; font-weight: 700; margin: 1.25rem 0 0.5rem; color: #111827; }
   h1:first-child { margin-top: 0; }
-  h2 { font-size: 1.2rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #111827; }
-  h3 { font-size: 1.05rem; font-weight: 600; margin: 0.875rem 0 0.4rem; color: #111827; }
-  h4 { font-size: 1rem; font-weight: 600; margin: 0.75rem 0 0.4rem; color: #1f2937; }
+  /* 장 제목 */
+  h2 {
+    font-size: 1.35rem; font-weight: 700; color: #111827;
+    margin: 1.4rem 0 0.7rem;
+  }
+  /* 대분류 — 굵은 상단 강조선 + 좌측 막대로 섹션 시작을 명확히 */
+  h3 {
+    font-size: 1.18rem; font-weight: 700; color: #1e3a8a;
+    margin: 1.5rem 0 0.6rem;
+    padding: 0.35rem 0 0.35rem 0.6rem;
+    border-top: 2.5px solid #1e3a8a;
+    border-left: 5px solid #1e3a8a;
+    background: #eef2ff;
+  }
+  /* 중분류(본문) — 좌측 막대 + 하단 밑줄로 소제목임을 명확히 */
+  h4 {
+    font-size: 1.02rem; font-weight: 700; color: #1f2937;
+    margin: 1.1rem 0 0.4rem;
+    padding-left: 0.5rem;
+    border-left: 3px solid #60a5fa;
+    border-bottom: 1px solid #dbeafe;
+    padding-bottom: 0.2rem;
+  }
   p { margin: 0.5rem 0; }
   strong { font-weight: 700; color: #111827; }
   em { font-style: italic; }
@@ -30,12 +50,18 @@ const PDF_STYLES = `
   ol { padding-left: 1.25rem; margin: 0.5rem 0; list-style: decimal; }
   li { margin: 0.125rem 0; }
   li > ul, li > ol { margin: 0.125rem 0; }
+  /* 작성 가이드 블록 — 회색 박스로 본문과 확실히 분리(제출 본문 아님 표시) */
   blockquote {
-    border-left: 3px solid #d1d5db;
-    padding-left: 0.75rem;
+    border-left: 4px solid #f59e0b;
+    background: #fffbeb;
+    padding: 0.5rem 0.85rem;
     margin: 0.75rem 0;
-    color: #4b5563;
+    color: #6b5e3f;
+    font-size: 0.92em;
+    border-radius: 0 0.3rem 0.3rem 0;
   }
+  blockquote p { margin: 0.25rem 0; }
+  blockquote ul, blockquote ol { margin: 0.25rem 0; }
   code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 0.875em;

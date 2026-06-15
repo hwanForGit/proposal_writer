@@ -126,16 +126,28 @@ bodyRouter.post('/body/section', async (req, res, next) => {
     const { client, model } = getLlmClient();
 
     let userContent: string;
+    let chunkChars: number; // 이번 회차에 기대하는 분량(자) — max_tokens 산정 기준
     if (isContinuation) {
       const prevLen = previousMarkdown!.length;
       if (hasTarget) {
         const remaining = Math.max(0, targetChars! - prevLen);
-        const thisChunk = Math.min(remaining || CONT_CHUNK_CAP, CONT_CHUNK_CAP);
-        userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. 본 중분류의 전체 목표 분량은 약 ${targetChars}자이며, [이전 응답]까지 약 ${prevLen}자가 작성되었습니다. 남은 약 ${remaining}자를 이어서 작성하되 **이번 회차는 약 ${thisChunk}자 이내**로만 작성하십시오(한 번에 길게 쓰면 timeout). [이전 응답]의 마지막 지점에서 자연스럽게 이어 쓰고, 같은 내용 반복·재시작·재요약은 절대 금지. 목표 분량에 도달했으면 억지로 늘리지 말고 자연스럽게 마무리하십시오.
+        if (remaining > 0) {
+          const thisChunk = Math.min(remaining, CONT_CHUNK_CAP);
+          chunkChars = thisChunk;
+          userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. 본 중분류의 전체 목표 분량은 약 ${targetChars}자이며, [이전 응답]까지 약 ${prevLen}자가 작성되었습니다. 남은 약 ${remaining}자를 이어서 작성하되 **이번 회차는 약 ${thisChunk}자 이내**로만 작성하십시오(한 번에 길게 쓰면 timeout). [이전 응답]의 마지막 지점에서 자연스럽게 이어 쓰고, 같은 내용 반복·재시작·재요약은 절대 금지. 목표 분량에 도달했으면 억지로 늘리지 말고 자연스럽게 마무리하십시오.
 
 [이전 응답 (이어쓰기 대상)]
 ${previousMarkdown}`;
+        } else {
+          // 목표 분량 도달 — [이전 응답]이 토큰 한도로 잘렸을 때 '마지막 부분만' 매끄럽게 마무리.
+          chunkChars = 800;
+          userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. 목표 분량에 이미 도달했습니다. [이전 응답]이 토큰 한도로 문장 중간에 끊겼으니, **끊긴 마지막 문장·단락만 자연스럽게 마무리하고 곧바로 종료**하십시오. 새 소주제·문단·표를 추가하지 말고, 반복·재요약은 절대 금지(보통 2~4문장이면 충분).
+
+[이전 응답 (잘린 상태)]
+${previousMarkdown}`;
+        }
       } else {
+        chunkChars = 2000;
         userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. **이전 응답이 max_tokens 한도로 도중에 끊겼으므로**, 아래 [이전 응답]의 마지막 지점에서 **자연스럽게 이어서** 작성하십시오. 같은 내용 반복·재시작·재요약 절대 금지. 끊긴 단락부터 매끄럽게 이어 쓰되, **이어지는 부분만 1,500~2,000자 이내**로 간결히 마무리하십시오.
 
 [이전 응답 (잘린 상태)]
@@ -144,17 +156,30 @@ ${previousMarkdown}`;
     } else if (hasTarget) {
       const thisChunk = Math.min(targetChars!, INIT_CHUNK_CAP);
       const willContinue = targetChars! > INIT_CHUNK_CAP;
+      chunkChars = thisChunk;
       userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. 다른 중분류는 절대 작성하지 마십시오. [Output Format]에 따라 본 중분류의 본문을 작성하십시오. 본 중분류의 목표 분량은 약 ${targetChars}자입니다. ${
         willContinue
           ? `한 번에 무리하지 말고 **이번 회차에는 약 ${thisChunk}자 이내**로 작성하십시오. 나머지는 이후 회차에서 이어서 채웁니다(한 번에 길게 쓰면 timeout).`
-          : `**약 ${targetChars}자 내외**로 핵심 근거·정량 데이터·비교 표를 담아 완결성 있게 작성하십시오.`
+          : `**약 ${targetChars}자 내외**로 핵심 근거·정량 데이터·비교 표를 담아 완결성 있게 작성하십시오. 목표 분량을 크게 초과하지 마십시오.`
       } 군더더기·동어반복으로 분량만 늘리지는 마십시오.`;
     } else {
+      chunkChars = 3500;
       userContent = `이번 회차의 대상 중분류는 "${midTitle}"입니다. 다른 중분류는 절대 작성하지 마십시오. [Output Format]에 따라 본 중분류의 본문을 작성하되, **응답 전체는 반드시 2,500~3,500자 이내로** 작성하십시오. 분량이 길어지면 timeout으로 작업이 중단됩니다.`;
     }
 
+    // max_tokens를 이번 회차 목표 분량에 비례시켜 과도 생성을 막는다.
+    //   한국어+마크다운 ≈ 1.3 tok/자 + 여유 마진. config 상한(초기/이어쓰기) 내로 클램프.
+    //   부족하면 잘려도(finish=length) 이어쓰기 루프가 목표까지 채우므로 안전(특히 목표 있는 본문).
+    const tokenCap = isContinuation
+      ? config.bodyContinueMaxTokens
+      : config.bodyMaxTokens;
+    const maxTokens = Math.min(
+      tokenCap,
+      Math.max(800, Math.round(chunkChars * 1.3) + 200),
+    );
+
     console.log(
-      `[body section${isContinuation ? ' (continue)' : ''}] "${midTitle}" prompt=${systemPrompt.length}자 model=${model}${
+      `[body section${isContinuation ? ' (continue)' : ''}] "${midTitle}" prompt=${systemPrompt.length}자 model=${model} target=${hasTarget ? targetChars : '-'} chunk=${chunkChars}자 max_tokens=${maxTokens}${
         isContinuation ? `, prev=${previousMarkdown.length}자` : ''
       }`,
     );
@@ -166,9 +191,7 @@ ${previousMarkdown}`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
-      max_tokens: isContinuation
-        ? config.bodyContinueMaxTokens
-        : config.bodyMaxTokens,
+      max_tokens: maxTokens,
     });
 
     const choice = completion.choices[0];

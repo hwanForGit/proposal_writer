@@ -7,6 +7,7 @@ import type { CoverMeta } from './types';
 
 const SCOPE_FILENAME_SUFFIX: Record<ExportScope, string> = {
   'full': '',
+  'body': '-본문',
   'outline-with-guide': '-outline',
   'titles-only': '-titles',
 };
@@ -215,7 +216,21 @@ export default function ExportDialog({ open, onClose }: Props) {
             />
             <span>
               <span className="font-medium">전체</span> — 표지 + (선택)Step 1 +
-              아웃라인 트리 + <strong>본문</strong> + 부록
+              아웃라인 가이드 + <strong>본문</strong> + 부록 (가이드는 회색 박스로
+              구분)
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs text-gray-800">
+            <input
+              type="radio"
+              name="export-scope"
+              checked={scope === 'body'}
+              onChange={() => setScope('body')}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">본문만</span> — 표지 + (선택)Step 1 +
+              <strong> 본문(가이드 제외)</strong> + 부록. 제출용 깔끔한 사업계획서
             </span>
           </label>
           <label className="flex items-start gap-2 text-xs text-gray-800">
