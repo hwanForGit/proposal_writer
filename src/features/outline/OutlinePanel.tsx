@@ -5,6 +5,7 @@ import {
   useWorkspaceStore,
 } from '@/features/workspace/store';
 import type {
+  AllocationItem,
   BodyState,
   OutlineStepState,
   PageAllocationState,
@@ -59,6 +60,8 @@ export default function OutlinePanel() {
   const generatePageAllocation = useWorkspaceStore(
     (s) => s.generatePageAllocation,
   );
+  const setAllocationPages = useWorkspaceStore((s) => s.setAllocationPages);
+  const initManualAllocation = useWorkspaceStore((s) => s.initManualAllocation);
   const resetAll = useWorkspaceStore((s) => s.resetAll);
 
   const pageByKey = useMemo(() => {
@@ -250,6 +253,8 @@ export default function OutlinePanel() {
             onSetPageLimit={setPageLimit}
             pageAllocation={pageAllocation}
             onGenerateAllocation={generatePageAllocation}
+            onSetAllocationPages={setAllocationPages}
+            onInitManualAllocation={initManualAllocation}
             pageByKey={pageByKey}
           />
         )}
@@ -804,6 +809,8 @@ interface Step2ViewProps {
   onSetPageLimit: (pages: number | null) => void;
   pageAllocation: PageAllocationState;
   onGenerateAllocation: () => void;
+  onSetAllocationPages: (key: string, pages: number) => void;
+  onInitManualAllocation: () => void;
   pageByKey: Map<string, number>;
 }
 
@@ -817,6 +824,8 @@ function Step2View({
   onSetPageLimit,
   pageAllocation,
   onGenerateAllocation,
+  onSetAllocationPages,
+  onInitManualAllocation,
   pageByKey,
 }: Step2ViewProps) {
   if (step2.status === 'fetching-sections') {
@@ -887,6 +896,8 @@ function Step2View({
         onSetPageLimit={onSetPageLimit}
         pageAllocation={pageAllocation}
         onGenerate={onGenerateAllocation}
+        onSetPages={onSetAllocationPages}
+        onInitManual={onInitManualAllocation}
       />
 
       {/* 현재 대분류 본문 */}
@@ -919,17 +930,24 @@ function AllocationPanel({
   onSetPageLimit,
   pageAllocation,
   onGenerate,
+  onSetPages,
+  onInitManual,
 }: {
   sections: SectionState[];
   pageLimit: number | null;
   onSetPageLimit: (pages: number | null) => void;
   pageAllocation: PageAllocationState;
   onGenerate: () => void;
+  onSetPages: (key: string, pages: number) => void;
+  onInitManual: () => void;
 }) {
   const allReady =
     sections.length > 0 && sections.every((s) => s.status === 'ready');
   const generating = pageAllocation.status === 'generating';
+  const ready = pageAllocation.status === 'ready';
   const total = pageAllocation.items.reduce((sum, it) => sum + it.pages, 0);
+  // 목표 대비 합계 차이 (목표 미설정 시 null)
+  const diff = pageLimit ? Math.round((total - pageLimit) * 2) / 2 : null;
 
   return (
     <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 px-3 py-2.5">
@@ -957,7 +975,7 @@ function AllocationPanel({
           title={
             !allReady
               ? '모든 대분류가 생성된 뒤 배분할 수 있습니다.'
-              : '중요도·강점 기반으로 중분류별 페이지를 배분합니다.'
+              : 'AI가 중요도·강점 기반으로 중분류별 페이지를 자동 배분합니다.'
           }
         >
           {generating ? (
@@ -965,11 +983,20 @@ function AllocationPanel({
               <span className="inline-block size-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
               배분 계산 중…
             </span>
-          ) : pageAllocation.status === 'ready' ? (
-            '다시 배분'
+          ) : ready ? (
+            'AI 다시 배분'
           ) : (
-            '페이지 배분'
+            'AI 자동 배분'
           )}
+        </button>
+        <button
+          type="button"
+          onClick={onInitManual}
+          disabled={!allReady || generating}
+          className="rounded border border-indigo-300 bg-white px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+          title="AI 없이 균등 분배로 시작해 중분류별로 직접 입력합니다."
+        >
+          직접 입력
         </button>
       </div>
 
@@ -993,14 +1020,111 @@ function AllocationPanel({
         </p>
       )}
 
-      {pageAllocation.status === 'ready' && (
-        <p className="mt-1.5 text-[11px] text-indigo-800">
-          ✓ {pageAllocation.items.length}개 중분류에 총 ≈{fmtPages(total)}페이지
-          배분됨. 아래 구조 트리에서 중분류별 장수를 확인하세요. 이 배분대로 본문
-          분량이 조절됩니다.
-        </p>
+      {ready && (
+        <>
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-indigo-800">
+            <span>
+              ✓ {pageAllocation.items.length}개 중분류 · 합계 ≈
+              {fmtPages(total)}페이지
+            </span>
+            {diff != null && diff !== 0 && (
+              <span
+                className={
+                  diff > 0 ? 'font-medium text-red-600' : 'font-medium text-amber-600'
+                }
+              >
+                (목표 {pageLimit}p 대비 {diff > 0 ? '+' : ''}
+                {fmtPages(diff)}p)
+              </span>
+            )}
+            {diff === 0 && (
+              <span className="font-medium text-emerald-600">(목표 일치 ✓)</span>
+            )}
+          </p>
+          <AllocationEditor
+            items={pageAllocation.items}
+            onSetPages={onSetPages}
+          />
+          <p className="mt-1 text-[11px] text-indigo-700/70">
+            이 배분대로 본문 분량이 조절됩니다. 합계가 목표와 달라도 입력값
+            그대로 적용돼요.
+          </p>
+        </>
       )}
     </div>
+  );
+}
+
+// 중분류별 페이지를 직접 조정하는 편집기 (대분류별 그룹). 접이식으로 패널을 깔끔히 유지.
+function AllocationEditor({
+  items,
+  onSetPages,
+}: {
+  items: AllocationItem[];
+  onSetPages: (key: string, pages: number) => void;
+}) {
+  // 대분류(mainIndex)별로 묶기 — items는 좌표 순서대로 정렬돼 있다.
+  const groups: { mainTitle: string; items: AllocationItem[] }[] = [];
+  for (const it of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.items[0]!.mainIndex === it.mainIndex) {
+      last.items.push(it);
+    } else {
+      groups.push({ mainTitle: it.mainTitle, items: [it] });
+    }
+  }
+
+  return (
+    <details className="mt-2 rounded border border-indigo-200 bg-white/70">
+      <summary className="cursor-pointer px-2.5 py-1.5 text-[11px] font-medium text-indigo-800">
+        중분류별 페이지 직접 조정 ▾
+      </summary>
+      <div className="space-y-2 px-2.5 pb-2.5">
+        {groups.map((g) => {
+          const sub = g.items.reduce((s, it) => s + it.pages, 0);
+          return (
+            <div key={g.mainTitle}>
+              <div className="flex items-center justify-between border-b border-indigo-100 pb-0.5 text-[11px] font-semibold text-indigo-900">
+                <span className="truncate">{g.mainTitle}</span>
+                <span className="shrink-0 text-indigo-600">
+                  합계 ≈{fmtPages(sub)}p
+                </span>
+              </div>
+              <div className="mt-1 space-y-1">
+                {g.items.map((it) => (
+                  <div
+                    key={it.key}
+                    className="flex items-center gap-2 text-[11px] text-gray-700"
+                  >
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      title={it.reason || it.midTitle}
+                    >
+                      {it.midTitle}
+                      {it.manual && (
+                        <span className="ml-1 text-indigo-400">·수동</span>
+                      )}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={it.pages}
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        onSetPages(it.key, v === '' ? 0 : Number(v));
+                      }}
+                      className="w-16 shrink-0 rounded border border-indigo-300 px-1.5 py-0.5 text-right text-[11px] focus:border-indigo-500 focus:outline-none"
+                    />
+                    <span className="shrink-0 text-indigo-500">p</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 

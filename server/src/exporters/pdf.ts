@@ -113,7 +113,9 @@ export async function markdownToPdf(markdown: string): Promise<Buffer> {
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // HTML은 인라인 스타일로 자기완결적(외부 폰트/이미지 URL 없음)이라 'load'면 충분.
+    // (puppeteer setContent 타입은 networkidle0을 허용하지 않음.)
+    await page.setContent(html, { waitUntil: 'load' });
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,

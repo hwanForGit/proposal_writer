@@ -83,6 +83,29 @@ export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Pro
       ),
     });
   };
+  // 인접 노드와 자리 교환(↑/↓). 경계를 벗어나면 그대로 둔다.
+  const moveMid = (id: string, dir: -1 | 1) => {
+    const i = tree.midNodes.findIndex((m) => m.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= tree.midNodes.length) return;
+    const midNodes = tree.midNodes.slice();
+    [midNodes[i], midNodes[j]] = [midNodes[j]!, midNodes[i]!];
+    apply({ ...tree, midNodes });
+  };
+  const moveSub = (midId: string, subId: string, dir: -1 | 1) => {
+    apply({
+      ...tree,
+      midNodes: tree.midNodes.map((m) => {
+        if (m.id !== midId) return m;
+        const i = m.subNodes.findIndex((s) => s.id === subId);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= m.subNodes.length) return m;
+        const subNodes = m.subNodes.slice();
+        [subNodes[i], subNodes[j]] = [subNodes[j]!, subNodes[i]!];
+        return { ...m, subNodes };
+      }),
+    });
+  };
 
   if (!valid) {
     return (
@@ -106,10 +129,14 @@ export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Pro
 
       {/* 중분류 카드 리스트 */}
       <div className="space-y-3">
-        {tree.midNodes.map((mid) => (
+        {tree.midNodes.map((mid, idx) => (
           <MidNodeCard
             key={mid.id}
             mid={mid}
+            canMoveUp={idx > 0}
+            canMoveDown={idx < tree.midNodes.length - 1}
+            onMoveUp={() => moveMid(mid.id, -1)}
+            onMoveDown={() => moveMid(mid.id, 1)}
             onUpdateTitle={(t) => updateMid(mid.id, { title: t })}
             onRemove={() => removeMid(mid.id)}
             onAddSub={() => addSub(mid.id)}
@@ -117,6 +144,7 @@ export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Pro
               updateSub(mid.id, subId, { title: t })
             }
             onRemoveSub={(subId) => removeSub(mid.id, subId)}
+            onMoveSub={(subId, dir) => moveSub(mid.id, subId, dir)}
           />
         ))}
       </div>
@@ -137,20 +165,30 @@ export default function SectionTreeView({ markdown, fallbackTitle, onSave }: Pro
 
 interface MidCardProps {
   mid: MidNode;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   onUpdateTitle: (t: string) => void;
   onRemove: () => void;
   onAddSub: () => void;
   onUpdateSubTitle: (subId: string, t: string) => void;
   onRemoveSub: (subId: string) => void;
+  onMoveSub: (subId: string, dir: -1 | 1) => void;
 }
 
 function MidNodeCard({
   mid,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
   onUpdateTitle,
   onRemove,
   onAddSub,
   onUpdateSubTitle,
   onRemoveSub,
+  onMoveSub,
 }: MidCardProps) {
   return (
     <div className="rounded-lg border-2 border-blue-300 bg-white p-4 shadow-sm">
@@ -161,6 +199,13 @@ function MidNodeCard({
           className="flex-1 text-base font-bold text-blue-900"
         />
         <div className="flex shrink-0 gap-1">
+          <ReorderButtons
+            canUp={canMoveUp}
+            canDown={canMoveDown}
+            onUp={onMoveUp}
+            onDown={onMoveDown}
+            label="중분류"
+          />
           <button
             type="button"
             onClick={onAddSub}
@@ -188,10 +233,14 @@ function MidNodeCard({
       )}
       {mid.subNodes.length > 0 && (
         <div className="mt-3 space-y-2 border-l-2 border-blue-100 pl-3">
-          {mid.subNodes.map((sub) => (
+          {mid.subNodes.map((sub, sIdx) => (
             <SubNodeCard
               key={sub.id}
               sub={sub}
+              canMoveUp={sIdx > 0}
+              canMoveDown={sIdx < mid.subNodes.length - 1}
+              onMoveUp={() => onMoveSub(sub.id, -1)}
+              onMoveDown={() => onMoveSub(sub.id, 1)}
               onUpdateTitle={(t) => onUpdateSubTitle(sub.id, t)}
               onRemove={() => onRemoveSub(sub.id)}
             />
@@ -206,11 +255,23 @@ function MidNodeCard({
 
 interface SubCardProps {
   sub: SubNode;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   onUpdateTitle: (t: string) => void;
   onRemove: () => void;
 }
 
-function SubNodeCard({ sub, onUpdateTitle, onRemove }: SubCardProps) {
+function SubNodeCard({
+  sub,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onUpdateTitle,
+  onRemove,
+}: SubCardProps) {
   return (
     <div className="rounded border border-blue-200 bg-blue-50/40 px-3 py-2">
       <div className="flex items-start justify-between gap-2">
@@ -219,14 +280,24 @@ function SubNodeCard({ sub, onUpdateTitle, onRemove }: SubCardProps) {
           onChange={onUpdateTitle}
           className="flex-1 text-sm font-semibold text-blue-800"
         />
-        <button
-          type="button"
-          onClick={onRemove}
-          className="rounded border border-gray-300 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-red-50 hover:text-red-600"
-          title="소분류 삭제"
-        >
-          ×
-        </button>
+        <div className="flex shrink-0 gap-1">
+          <ReorderButtons
+            canUp={canMoveUp}
+            canDown={canMoveDown}
+            onUp={onMoveUp}
+            onDown={onMoveDown}
+            label="소분류"
+            compact
+          />
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded border border-gray-300 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-red-50 hover:text-red-600"
+            title="소분류 삭제"
+          >
+            ×
+          </button>
+        </div>
       </div>
       {sub.guidance && (
         <GuidanceBox
@@ -236,6 +307,52 @@ function SubNodeCard({ sub, onUpdateTitle, onRemove }: SubCardProps) {
           text={sub.guidance}
         />
       )}
+    </div>
+  );
+}
+
+// ─── 순서 변경 버튼 (↑/↓) ──────────────────────────────────────
+
+function ReorderButtons({
+  canUp,
+  canDown,
+  onUp,
+  onDown,
+  label,
+  compact,
+}: {
+  canUp: boolean;
+  canDown: boolean;
+  onUp: () => void;
+  onDown: () => void;
+  label: string;
+  compact?: boolean;
+}) {
+  const cls = `rounded border border-gray-300 text-gray-600 enabled:hover:bg-blue-50 enabled:hover:text-blue-700 disabled:opacity-30 ${
+    compact ? 'px-1 py-0.5 text-[10px]' : 'px-1.5 py-1 text-[11px]'
+  }`;
+  return (
+    <div className="flex">
+      <button
+        type="button"
+        onClick={onUp}
+        disabled={!canUp}
+        className={`${cls} rounded-r-none`}
+        title={`${label} 위로 이동`}
+        aria-label={`${label} 위로 이동`}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        onClick={onDown}
+        disabled={!canDown}
+        className={`${cls} -ml-px rounded-l-none`}
+        title={`${label} 아래로 이동`}
+        aria-label={`${label} 아래로 이동`}
+      >
+        ↓
+      </button>
     </div>
   );
 }
@@ -311,14 +428,33 @@ interface GuidanceProps {
 
 // "1) ... 2) ..." / "1. ... 2. ..." 형태(개조식)면 항목별로 분리. 아니면 null.
 // 파서가 줄바꿈을 공백으로 합치므로, 번호 마커 직전에서 분리해 복원한다.
+//
+// ★ 소수·재무 수치 보호: 번호 마커는 (1) 문장 시작 또는 공백 뒤의 1~2자리 숫자 +
+//   ".)"+ 공백이고, (2) 1,2,3… 으로 시작하는 '연속 수열'일 때만 리스트로 인정한다.
+//   "2.2조", "3.0억" 같은 소수는 마커 뒤에 공백이 없어 마커로 잡히지 않고,
+//   숫자가 흩어진 텍스트도 연속 수열이 아니면 그대로 한 문단으로 둔다.
 function splitItemized(text: string): string[] | null {
   const s = text.trim();
-  if (!/\d+[.)]\s/.test(s)) return null;
-  const parts = s
-    .split(/\s*(?=\d+[.)]\s)/)
-    .map((p) => p.replace(/^\d+[.)]\s*/, '').trim())
-    .filter(Boolean);
-  return parts.length >= 2 ? parts : null;
+  // 마커 후보 수집: 시작/공백 뒤의 "N. " 또는 "N) " (N=1~2자리). 마커 뒤 공백 필수.
+  const markerRe = /(^|\s)(\d{1,2})[.)]\s+/g;
+  const markers: { at: number; n: number }[] = [];
+  for (let m = markerRe.exec(s); m; m = markerRe.exec(s)) {
+    markers.push({ at: m.index + m[1]!.length, n: Number(m[2]) });
+  }
+  // 1부터 시작하는 연속 수열(1,2,3,…)이 아니면 리스트가 아님 → 원문 그대로.
+  if (markers.length < 2) return null;
+  if (markers.some((mk, i) => mk.n !== i + 1)) return null;
+
+  const parts: string[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i]!.at;
+    const end = i + 1 < markers.length ? markers[i + 1]!.at : s.length;
+    // 검증된 마커만 정확히 제거(소수점 정수부는 건드리지 않음).
+    const seg = s.slice(start, end).replace(/^\d{1,2}[.)]\s+/, '').trim();
+    if (seg) parts.push(seg);
+  }
+  // 분리 후 빈 조각이 생겼으면(오분할 신호) 원문 그대로 둔다.
+  return parts.length === markers.length ? parts : null;
 }
 
 function GuidanceBox({ label, text, compact, className }: GuidanceProps) {

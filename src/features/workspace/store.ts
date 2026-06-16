@@ -157,6 +157,7 @@ export interface AllocationItem {
   pages: number; // 배정 페이지 (0.5 단위)
   weight: number; // LLM 중요도 가중치 (1~10)
   reason: string; // 배분 근거 한 줄
+  manual?: boolean; // 사용자가 수동으로 조정한 항목
 }
 
 export type PageAllocationStatus = 'idle' | 'generating' | 'ready' | 'error';
@@ -187,6 +188,38 @@ const targetCharsForBody = (
   const key = `${body.ref.mainIndex}-${body.ref.midIndex}`;
   const a = items.find((it) => it.key === key);
   return a && a.pages > 0 ? Math.round(a.pages * CHARS_PER_PAGE) : null;
+};
+
+// Step 2 대분류들에서 중분류 평면 목록 추출 (body/배분 좌표계: key = `${mainIndex}-${midIndex}`)
+interface MidMeta {
+  key: string;
+  mainIndex: number;
+  midIndex: number;
+  mainTitle: string;
+  midTitle: string;
+  midGuidance: string;
+}
+const collectMidItems = (sections: SectionState[]): MidMeta[] =>
+  sections.flatMap((sec) => {
+    if (!sec.markdown) return [];
+    const tree = parseSection(sec.markdown, sec.title);
+    return tree.midNodes.map((mid, mIdx) => ({
+      key: `${sec.index}-${mIdx}`,
+      mainIndex: sec.index,
+      midIndex: mIdx,
+      mainTitle: `[${sec.index}] ${sec.title}`,
+      midTitle: mid.title,
+      midGuidance: mid.guidance,
+    }));
+  });
+
+// n개 항목에 total 페이지를 0.5 단위로 균등 분배(합 = total). 큰 잔여부터 +0.5.
+const evenSplitPages = (n: number, total: number): number[] => {
+  if (n <= 0) return [];
+  const units = Math.round(total / 0.5); // 0.5 단위 개수
+  const base = Math.floor(units / n);
+  const rem = units - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < rem ? 1 : 0)) * 0.5);
 };
 
 interface WorkspaceState {
@@ -234,6 +267,10 @@ interface WorkspaceState {
   resolveContinue: (decision: boolean) => void;
   setPageLimit: (pages: number | null) => void;
   generatePageAllocation: () => Promise<void>;
+  // 중분류 1개의 배정 페이지를 수동으로 덮어쓴다(0.5 단위). 합계가 목표와 달라도 허용.
+  setAllocationPages: (key: string, pages: number) => void;
+  // LLM 없이 중분류 목록을 균등 분배(목표 페이지 합)로 채워 수동 편집을 시작한다.
+  initManualAllocation: () => void;
   resetOutline: () => void;
   resetAll: () => void;
 }
@@ -1040,18 +1077,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         // 중분류 평면 목록 (body 좌표계와 동일: key = `${mainIndex}-${midIndex}`)
-        const items = step2.sections.flatMap((sec) => {
-          if (!sec.markdown) return [];
-          const tree = parseSection(sec.markdown, sec.title);
-          return tree.midNodes.map((mid, mIdx) => ({
-            key: `${sec.index}-${mIdx}`,
-            mainIndex: sec.index,
-            midIndex: mIdx,
-            mainTitle: `[${sec.index}] ${sec.title}`,
-            midTitle: mid.title,
-            midGuidance: mid.guidance,
-          }));
-        });
+        const items = collectMidItems(step2.sections);
 
         if (items.length === 0) {
           set({
@@ -1108,6 +1134,57 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             pageAllocation: { status: 'error', items: [], error: errInfo(err) },
           });
         }
+      },
+
+      setAllocationPages: (key, pages) => {
+        const next = Math.max(0, Math.round(pages * 2) / 2); // 0.5 단위, 음수 방지
+        set((state) => ({
+          pageAllocation: {
+            ...state.pageAllocation,
+            status: 'ready',
+            error: null,
+            items: state.pageAllocation.items.map((it) =>
+              it.key === key
+                ? { ...it, pages: next, manual: true, reason: '수동 조정' }
+                : it,
+            ),
+          },
+        }));
+      },
+
+      initManualAllocation: () => {
+        const { outline, pageLimit } = get();
+        const items = collectMidItems(outline.step2.sections);
+        if (items.length === 0) {
+          set({
+            pageAllocation: {
+              status: 'error',
+              items: [],
+              error: {
+                code: 'NO_MID_SECTIONS',
+                message: 'Step 2에서 중분류를 추출하지 못했습니다. Step 2 결과를 확인해주세요.',
+              },
+            },
+          });
+          return;
+        }
+        // 목표가 있으면 균등 분배, 없으면 0에서 시작.
+        const split =
+          pageLimit && pageLimit > 0
+            ? evenSplitPages(items.length, pageLimit)
+            : items.map(() => 0);
+        const merged: AllocationItem[] = items.map((it, i) => ({
+          key: it.key,
+          mainIndex: it.mainIndex,
+          midIndex: it.midIndex,
+          mainTitle: it.mainTitle,
+          midTitle: it.midTitle,
+          pages: split[i] ?? 0,
+          weight: 0,
+          reason: '수동 배분',
+          manual: true,
+        }));
+        set({ pageAllocation: { status: 'ready', items: merged, error: null } });
       },
 
       // ── 한 번에 끝까지 자동 진행 ──────────────────────────────────
